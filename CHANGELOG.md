@@ -12,8 +12,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
-- README and evidence documents rewritten in a maintainer's voice: first-person reasoning, concrete failures ("I tried to make the extraction call warm and couldn't"), fewer marketing-style claims. The Chinese and English versions were both rewritten, and the example checkpoint now matches the renderer's real section names.
-- `docs/EVIDENCE.md` and `docs/EVIDENCE.zh-CN.md` rewritten in plain language: conclusions first, one number per idea (~720k vs ~170k extra input tokens), a short explanation of why the shipped summarizer cannot use the cache, and raw per-event tables moved into collapsible appendices.
+- README and evidence documents rewritten in a neutral, report-style voice (organization as author, no first-person narration), with explicit definitions for every cost unit. The Chinese and English versions were both rewritten, and the example checkpoint now uses the renderer's real section names.
+- `docs/EVIDENCE.md` and `docs/EVIDENCE.zh-CN.md` restructured as measurement reports: objective, data and method, baseline, measured cost, attribution, mode comparison, quality constraints, uncertainty, reproduction.
 - Documentation now reports measured cache behavior instead of the earlier warm-prefix expectation: `extract` mode claims cost parity with the shipped summarizer, and `deterministic` mode is documented as the zero-model-call, ~4× cheaper option on the measured events.
 - Offline suite is now 80 assertions across structure, pipeline and benchmark.
 

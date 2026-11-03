@@ -7,35 +7,37 @@ English | [简体中文](./README.zh-CN.md)
 [![License](https://img.shields.io/badge/license-MIT-263238)](./LICENSE)
 [![CI](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml/badge.svg)](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml)
 
-A context-compaction backend for DeepSeek Harness. I call it Structural Compression.
+A context-compaction backend for DeepSeek Harness, maintained by 2718Labs. The project name is Structural Compression (结构性压缩).
 
-Harness's built-in compaction asks a model to read the history and write a summary, then puts that summary back into the context. This plugin does something different: it pulls cited sentences out of the original text, works out which of them are load-bearing, and keeps only those — each one traceable back to the source.
+The compaction backend shipped with Harness asks a model to read the history and write a summary, which is then written back into the context. This plugin takes a different route: it extracts items with verbatim citations from the source, computes the load-bearing relations between them, and keeps only the items that are load-bearing and verifiable against the source. The compression ratio is comparable to the shipped backend; the difference is that the published content is traceable.
 
-## Why I built it
+## Measured compaction cost
 
-Before writing any code I measured where the money goes in long sessions. I ran the numbers over 25 session logs from this machine (3,515 requests, 997M prompt tokens):
+The measurement was carried out to determine the actual cost structure of compaction. Data source: 25 session logs from a single machine, 3,515 requests, 997,002,631 prompt tokens. Method, definitions and reproduction steps are in [the measurement report](./docs/EVIDENCE.md).
 
-- Normal requests hit the provider cache 99.20% of the time. That part is cheap.
-- Every shipped compaction makes the model re-read roughly 550k tokens of history at the price of fresh input.
-- That's not cache expiry. The request right before one measured compaction hit 99.85% of its prompt, 0.1 seconds earlier. The summarization request only matched the first 9,856 cached tokens.
+Results:
 
-550k tokens is about a 400-page book. Each compaction makes it read that book again.
+- The steady-state prefix-cache hit rate is 99.20%. Input cost in long sessions is carried mostly by the cache.
+- Each automatic compaction by the shipped backend reads approximately 550,000 additional tokens of history and is billed at uncached input rates.
+- That additional read is not caused by cache expiry. The request preceding each of the three measured compactions hit 99.93%, 99.85% and 99.07% of its prompt, 12.8 s, 0.1 s and 1.1 s earlier respectively. The summarization request itself matched only the first 0 to 9,856 cached tokens.
 
-I wanted the extraction call to reuse the cache too. It doesn't work: the request the harness replays at compaction time isn't byte-identical to the request it actually sent, because some of that request lived outside the session log. So there are two options now:
+At a rough conversion for mixed Chinese/English text, 550,000 tokens corresponds to 350,000 to 450,000 characters.
 
-- **`deterministic`**: no model call at all during compaction, just structural selection. Skips those 550k tokens, but the output is rougher.
-- **`extract`**: still one model call, roughly the same cost as the shipped summarizer — but every line in the checkpoint traces back to the source, and publication is refused if a pinned constraint would be dropped.
+The plugin therefore provides two modes:
 
-I run `extract` myself, because I trust what comes out. If you care more about the bill, `deterministic` cuts about three quarters of that input.
+- `deterministic`: no model call during compaction, structural selection only. On the three measured compactions the additional input drops to approximately 170,000 tokens (about 0.25×).
+- `extract`: one model call, at approximately the same cost as the shipped backend. The difference is that every item in the result traces back to the source, and publication is refused when a critical constraint would be lost.
 
-## What a checkpoint looks like
+`extract` mode does not reduce model-call cost. The replay request built at compaction time is not byte-identical to the request that was actually sent; part of the request-time content is not in the session log, so the preceding cache cannot be reused. This is an inherent cost of replay-based summarization, and this plugin shares it. Making that call effectively free requires request-time information that the log does not contain; it is not implemented and is listed on the roadmap.
 
-Here's what a render looks like, using the test fixture's theme (schematic, but the shape is what the renderer emits):
+## Output example
+
+The following is a format illustration, using the theme of the test fixture; the shape matches what the renderer emits:
 
 ```
 ## Primary Request and Intent
 - Make the static route table in router.ts lazy while keeping /api/health
-- User note: don't break the cache hit rate
+- User note: do not break the cache hit rate
 
 ## Critical Context
 - /api/health must stay
@@ -46,30 +48,26 @@ Here's what a render looks like, using the test fixture's theme (schematic, but 
 - E_ROUTE_DUP lives in registry.ts:88 — "E_ROUTE_DUP"
 ```
 
-The quoted text is verbatim from the source. If the quote isn't found in the original, that item doesn't make it into the checkpoint. The model only picks sentences and copies them; layout, budget, and what gets dropped are all local arithmetic.
+Text inside the quotes is verbatim from the source. An item whose quote cannot be located in the source is discarded. The model only selects and copies items; layout, budget control and selection are performed locally.
 
 ## How it works
 
-One compaction, roughly:
+1. Replay the history being compacted, together with the system prompt and tool list, to the model, and append an instruction that requests JSON: each item carries a kind, a short summary, and a quote that must appear verbatim in the source.
+2. Verify every quote locally. Items that cannot be located, or that were invented, are discarded.
+3. Treat the surviving items as degrees of freedom. Shared source, adjacency and same-kind establish stiffness; the current request acts as the load; exact anchors and open loops are pinned as supports.
+4. Solve the KKT system and perform static condensation to obtain the load-bearing set.
+5. Produce a certificate: whether supports were eliminated, whether the selection is self-consistent, and whether the condensation reconstructs the full response. Any failed check prevents publication.
+6. Render the result within the checkpoint budget.
 
-1. Replay the span being compacted (plus the system prompt and tools) to the model, append an instruction, and ask for JSON: each item has a kind, a short summary, and a quote that must appear verbatim in the source.
-2. Verify every quote locally. Missing quotes and invented ones are dropped.
-3. Treat the survivors as degrees of freedom. Shared source, adjacency, and same-kind become stiffness; the current request is the load; exact anchors and open loops are pinned as supports.
-4. Solve a KKT system, run static condensation, keep the load-bearing set.
-5. Emit a certificate: were supports eliminated, is the selection self-consistent, does the condensation reconstruct the original response? If any check fails, nothing is published.
-6. Render the result into the checkpoint budget.
+Failures degrade step by step: a failed structural compile falls back to local rendering with no model call; a failed local render falls back to the shipped summarizer. A session is never left without a checkpoint.
 
-Any failure falls back one step: structural compile fails → deterministic render with no model call; that fails too → the shipped summarizer. A session never ends up without a checkpoint.
+## Attachment point
 
-## Where it attaches
+The desktop application places the compaction backend inside each agent preset's isolated scope, so a `compaction` provider mounted on the Host plane is not visible to it. This plugin therefore does not register a second `compaction` provider. It replaces the one extension point the shipped engine publicly exposes: `BasicCompactionEngine.prototype.summarize`. The shipped compaction flow dispatches through that method on every compaction, so replacing it also covers the preset-plane engine, while the shipped transaction, lock, overflow recovery, retained tail and replay logic remain unchanged. The original method is restored when the plugin is unloaded.
 
-This part is unusual, so it's worth knowing.
+The plugin also mounts a Host-plane `compaction` provider for compositions that have no preset plane.
 
-The desktop app puts the compaction backend inside each agent preset's isolated scope. A `compaction` provider mounted on the Host plane can't see it. So the plugin doesn't register a second provider; it replaces the one extension point the shipped engine publicly admits: `BasicCompactionEngine.prototype.summarize`. The shipped compaction flow calls that method dynamically every time, so swapping it covers the preset-plane engine as well. The shipped transaction, lock, overflow recovery, retained tail, and replay stay exactly as shipped, and unloading the plugin restores the original method.
-
-The plugin also mounts a Host-plane `compaction` provider, so compositions without a preset plane still work.
-
-After installing, the self-test tells you which engine is actually active:
+After installation, the self-test reports which engine is active:
 
 ```json
 "hook": {
@@ -79,17 +77,17 @@ After installing, the self-test tells you which engine is actually active:
 }
 ```
 
-## Install
+## Installation
 
-You need the desktop Harness, with `BasicCompactionEngine` reachable in the composition (verified on `0.2.1-rc.5`).
+Requires the desktop Harness with `BasicCompactionEngine` reachable in the composition (verified on `0.2.1-rc.5`).
 
-With the plugin manager, install the bundle from its GitHub spec:
+Install the GitHub bundle with the plugin manager:
 
 ```
 target: github:2718labs/dsh-compaction-continuum#v0.3.0
 ```
 
-Manually, add the dependency and the bundle to `~/.dsh/profiles/<profile>/package.json`. The bundle must come after `@deepseek-ai/dsh-web-app`:
+For a manual installation, add the dependency and the bundle to `~/.dsh/profiles/<profile>/package.json`. The bundle must be listed after `@deepseek-ai/dsh-web-app`:
 
 ```json
 {
@@ -100,17 +98,17 @@ Manually, add the dependency and the bundle to `~/.dsh/profiles/<profile>/packag
 }
 ```
 
-Then run `/context_status` in a session, or hit `http://127.0.0.1:<port>/compaction-continuum/ping`. The port is the one `dsh web` gave you; mine is 48483.
+After installation, run `/context_status` in a session, or request `http://127.0.0.1:<port>/compaction-continuum/ping`. The port is the one printed by `dsh web`.
 
 ## Commands
 
-| Command | What it does |
+| Command | Description |
 | --- | --- |
-| `/compact` | Compact now. On desktop the preset's own command reaches this compressor; the plugin also registers a same-name fallback. |
-| `/context_status` | Context size, trigger, the last compaction's cost, real cache hit rate. No conversation content. |
-| `/context_inspect` | The compaction ledger: cut ranges, publication cost, structural audit, certificate result. |
+| `/compact` | Run one compaction immediately. On desktop the preset's own command reaches this compressor; the plugin also registers a same-name fallback. |
+| `/context_status` | Reports context size, trigger threshold, the cost of the last compaction and the real cache hit rate. No conversation content is reported. |
+| `/context_inspect` | Reports the compaction ledger: cut range, publication cost, structural audit and certificate result. |
 
-`/context_status` looks like this:
+Sample `/context_status` output:
 
 ```
 hook               : installed on @deepseek-ai/dsh-compaction-basic; active engine shipped BasicCompactionEngine (preset plane, hooked)
@@ -123,48 +121,52 @@ cache accounting   : 123 requests, hit 99.24% (384347520 cached / 2935624 uncach
 
 ## Configuration
 
-The plugin row only configures the compressor. Thresholds and retention belong to the shipped engine that runs it.
+The plugin row configures the compressor only. Compaction thresholds and retention are determined by the shipped engine that runs it.
 
-| Key | Default | Meaning |
+| Key | Default | Description |
 | --- | --- | --- |
-| `mode` | `extract` | `extract` makes one model call; `deterministic` stays local; `off` hands everything back to the shipped summarizer |
+| `mode` | `extract` | `extract` performs one model call; `deterministic` stays fully local; `off` returns control to the shipped summarizer |
 | `extractorMaxTokens` | `12000` | Output cap for the extraction call |
 | `checkpointMaxTokens` | `6000` | Checkpoint budget |
-| `selectionThreshold` | `0.35` | Load-bearing cutoff, relative to the maximum displacement |
-| `minKeep` | `8` | Minimum number of kept items |
-| `statusCommands` | `true` | Register the commands and loopback diagnostics |
-| `maxRecordedCompactions` | `32` | Ledger entries per session |
-| `logDecisions` | `true` | Log compile decisions |
+| `selectionThreshold` | `0.35` | Load-bearing cutoff relative to the maximum displacement |
+| `minKeep` | `8` | Minimum number of items retained |
+| `statusCommands` | `true` | Whether to register the commands and loopback diagnostics |
+| `maxRecordedCompactions` | `32` | Compaction-ledger entries retained per session |
+| `logDecisions` | `true` | Whether compile decisions are logged |
 
-Keys shared with the shipped backend — `thresholdRatio`, `retainTokens`, `maxTokens` and the rest — only apply when this plugin is itself the `compaction` provider (compositions without a preset plane). On desktop the preset engine's policy is what runs; `/context_status` reports the resolved values.
+Keys shared with the shipped backend — `thresholdRatio`, `retainTokens`, `maxTokens` and similar — take effect only when this plugin is itself the `compaction` provider. On desktop, the preset engine's policy applies; `/context_status` reports the resolved values.
 
-## Numbers
+## Cache accounting
 
-Method and per-event tables are in [docs/EVIDENCE.md](./docs/EVIDENCE.md). The short version:
+Method and per-event tables are in [the measurement report](./docs/EVIDENCE.md). Summary:
 
 | Observation | Value |
 | --- | --- |
 | Steady-state cache hit rate (25 sessions / 3,515 requests) | 99.20% |
-| One shipped automatic compaction | ~720k extra input tokens: ~550k re-reading history + ~170k for the re-read any rewrite pays |
-| The summarizer call in those events | matched 0–9,856 cached tokens of its ~550k prompt, while the request 0.1–12.8 s earlier hit 99%+ |
-| Manual `/compact` after a long idle | the summarizer call paid 331,799 uncached tokens; the cache really had expired, so that one is unavoidable |
-| Tool-result pruning | three runs freed 141,041 tokens and forced 1,675,192 tokens of re-reading (~12×). This compressor does no pruning |
+| Additional input per shipped automatic compaction | approximately 720,000 tokens: about 550,000 for the summarizer's re-read plus about 170,000 for the re-read that any rewrite incurs |
+| Summarizer call in those events | matched 0 to 9,856 tokens of its approximately 550,000-token prompt; the preceding request hit above 99% and was 0.1 to 12.8 s old |
+| Manual `/compact` after a long idle period | the summarizer call paid 331,799 uncached tokens; the cache had genuinely expired |
+| Tool-result pruning | three runs freed 141,041 tokens and forced 1,675,192 additional tokens of reading (about 12×) |
 
-Run `node bench/report.mjs` to see your own machine's numbers.
+Reproduce on the local machine:
 
-## Things that are wrong or missing
+```bash
+node bench/report.mjs
+```
 
-- Thresholds and retention come from the preset's shipped engine. Manual `/compact` cuts deeper than automatic compaction (the shipped engine retains 0 for manual).
-- If extraction can't produce verifiable quotes, the checkpoint falls back to deterministic rendering; if that can't shrink the source either, the shipped summarizer runs. So quality depends on how disciplined the model is about quoting. The certificate proves the structure is self-consistent, not that no information was lost.
-- The extraction call can't reuse the live request prefix, so `extract` costs the same as the shipped summarizer. `deterministic` avoids the call entirely. Making the replay byte-identical to the live request needs request-time data the log doesn't have; it's on the roadmap and I don't have it working.
-- The hook targets one specific shipped method. If a future release renames or moves it, the plugin silently falls back to the shipped summarizer rather than breaking a session — check `hook.backendUsesHookedSummarize` after upgrades.
-- The desktop preset still mounts the shipped tool-result pruner. It measured as a net loss, but this plugin doesn't touch it. Disabling it means overriding the preset declaration; `docs/DESIGN.md` explains why I didn't do that.
+## Known limitations
+
+- Desktop thresholds and retention come from the preset's shipped engine. Manual `/compact` cuts deeper than automatic compaction (the shipped engine retains 0 for manual compaction).
+- When extraction cannot produce verifiable quotes, the checkpoint degrades to deterministic rendering; when that cannot shrink the source, the shipped summarizer runs. Quality therefore depends on the model's citation discipline. The certificate establishes structural self-consistency, not information-theoretic completeness.
+- The extraction call cannot reuse the live request cache, so `extract` mode costs the same as the shipped backend. `deterministic` mode skips that call. A replay that is byte-identical to the live request requires request-time information absent from the log; this is not implemented.
+- The hook depends on one specific shipped method. If that method is renamed or moved, the plugin silently falls back to the shipped summarizer without breaking the session. Check `hook.backendUsesHookedSummarize` after upgrades.
+- The desktop preset still mounts the shipped tool-result pruner. Measurements show it is a net loss, but this plugin does not control that component. Disabling it requires overriding the preset declaration; the trade-off is discussed in `docs/DESIGN.md`.
 
 ## Development
 
 ```bash
 npm run check   # syntax
-npm test        # 80 offline assertions, no Harness install needed
+npm test        # 80 offline assertions, no Harness installation required
 node bench/report.mjs   # cache accounting over this machine's session logs
 ```
 
@@ -173,18 +175,18 @@ Layout:
 ```
 lib/index.js            host side: engine hook, commands, accounting, diagnostics
 lib/pipeline.js         extraction → structure → render
-lib/structure/core.js   stiffness assembly, KKT, static condensation, certificates
-bench/                  read session logs, account for cache and compaction
+lib/structure/core.js   stiffness assembly, KKT solve, static condensation, certificates
+bench/                  session-log cost accounting
 test/                   offline tests
 docs/DESIGN.md          design notes
-docs/EVIDENCE.md        measured evidence
+docs/EVIDENCE.md        measurement report
 ```
 
-Invariants a PR must keep are in [CONTRIBUTING.md](./CONTRIBUTING.md).
+Invariants a pull request must preserve are listed in [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-## Privacy
+## Privacy and security
 
-No telemetry, no network calls of its own, no disk state. The two loopback diagnostic endpoints are for local debugging and contain no conversation content; set `statusCommands: false` to turn them off. Details in [SECURITY.md](./SECURITY.md).
+The plugin contains no telemetry, makes no network requests of its own and writes no state to disk. The two loopback diagnostic endpoints are intended for local troubleshooting and contain no conversation content; they can be disabled with `statusCommands: false`. See [SECURITY.md](./SECURITY.md).
 
 ## License
 

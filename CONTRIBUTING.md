@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for taking a look. This is a small, focused plugin: it is a compression *backend* for DeepSeek Harness, not a general context toolkit. Contributions that keep it small and measurable are the most welcome.
+This document describes how to contribute to the project. The plugin is small and focused: a compression backend for DeepSeek Harness, not a general context toolkit. Contributions that keep it small and measurable are preferred.
 
 ## Development setup
 
