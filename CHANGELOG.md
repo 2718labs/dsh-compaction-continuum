@@ -2,10 +2,14 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-04
 
 ### Added
 
+- `next_step` atom kind: the extraction instruction now always requests the immediate continuation, and that atom is pinned as a structural support so the load-bearing solve cannot eliminate it.
+- Deterministic continuation floor in the renderer: when extraction supplies no next-step atom, the checkpoint quotes the latest real user request verbatim (request-time scaffolding and a merged prior checkpoint are stripped), or the latest recorded assistant state when the span has no user message. The floor is laid out first inside the checkpoint budget.
+- Certificate field `nextStepAnchored` and audit field `nextStepSource` (`atom` / `latest-request` / `latest-state`); a checkpoint without a continuation anchor is refused instead of published.
+- Long-task regression test: three successive compaction generations keep the latest request in `## Next Step` and certify it.
 - `bench/` reproducible accounting over recorded session logs: per-session cache baseline, compaction anatomy (summarizer call + publication re-read, with backend detection from the published audit), and pruner-run cost, with hashed session labels and no content access.
 - `docs/EVIDENCE.md` / `docs/EVIDENCE.zh-CN.md`: measured evidence and methodology (25 sessions, 3,515 requests, 997M prompt tokens), including the finding that shipped summarization calls hit only the system/tools head of the cache (~0–9,856 of ~550k tokens) even 0.1 s after a 99.85%-cached request.
 - Benchmark harness tests (discovery, accounting math, backend detection, pruner attribution, rendering).
@@ -16,10 +20,16 @@ All notable changes to this project are documented here. The format follows [Kee
 - README and the measurement report now lead with **plugin-installed measurements** (366-message span: 333,184 cached / 468 uncached / 9,954 output tokens, 365 candidates → 46 retained, 2,243-character certified checkpoint) and keep the shipped-backend figures as an explicitly labelled baseline.
 - README's cost section and the measurement report summary are now tables instead of bullet lists, and state explicitly that the cache behavior is a constraint of replay-based summarization rather than a defect of the shipped backend. The shipped backend's transaction, lock, overflow recovery, retained tail and replay are noted as preserved unchanged.
 - README now includes a Mermaid flowchart of the compression pipeline, including both failure branches (unparseable extraction and failed certificate).
+- README (both languages) gained a continuation section: how the next-step anchor is guaranteed, that the guarantee is structural rather than information-theoretic, and why automatic compaction retains a verbatim tail while `/compact` is a deep reset.
 - README and evidence documents rewritten in a neutral, report-style voice (organization as author, no first-person narration), with explicit definitions for every cost unit. The Chinese and English versions were both rewritten, and the example checkpoint now uses the renderer's real section names.
 - `docs/EVIDENCE.md` and `docs/EVIDENCE.zh-CN.md` restructured as measurement reports: objective, data and method, baseline, measured cost, attribution, mode comparison, quality constraints, uncertainty, reproduction.
 - Documentation now reports measured cache behavior instead of the earlier warm-prefix expectation: `extract` mode claims cost parity with the shipped summarizer, and `deterministic` mode is documented as the zero-model-call, ~4× cheaper option on the measured events.
-- Offline suite is now 80 assertions across structure, pipeline and benchmark.
+- Offline suite is now 95 assertions across structure, pipeline and benchmark.
+
+### Fixed
+
+- `## Next Step` was unreachable: no atom kind mapped to that section, so every structural checkpoint rendered `(none)` and the successor received no explicit continuation, while the shipped summarizer fills that section. A `next_step` kind now maps to it and is pinned as a support.
+- Next-step atoms are laid out before the rest of the checkpoint, and the support-limiting path no longer drops the continuation anchor, so the checkpoint budget cannot squeeze the section out.
 
 ## [0.3.0] - 2026-11-04
 
@@ -57,7 +67,8 @@ First public release: **结构性压缩 / Structural Compression**.
 
 - Initial structural compressor: extraction pipeline, stiffness/KKT/condensation core, certificates, deterministic render, offline tests.
 
-[Unreleased]: https://github.com/2718labs/dsh-compaction-continuum/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/2718labs/dsh-compaction-continuum/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/2718labs/dsh-compaction-continuum/releases/tag/v0.4.0
 [0.3.0]: https://github.com/2718labs/dsh-compaction-continuum/releases/tag/v0.3.0
 [0.2.1]: https://github.com/2718labs/dsh-compaction-continuum/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/2718labs/dsh-compaction-continuum/releases/tag/v0.2.0

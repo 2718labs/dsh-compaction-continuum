@@ -2,7 +2,7 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-v0.3.0-A44742)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.4.0-A44742)](./CHANGELOG.md)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.2.1--rc.5-1F6B5B)](https://github.com/deepseek-ai)
 [![License](https://img.shields.io/badge/license-MIT-263238)](./LICENSE)
 [![CI](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml/badge.svg)](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml)
@@ -105,9 +105,19 @@ The numbered steps:
 3. Treat the surviving items as degrees of freedom. Shared source, adjacency and same-kind establish stiffness; the current request acts as the load; exact anchors and open loops are pinned as supports.
 4. Solve the KKT system and perform static condensation to obtain the load-bearing set.
 5. Produce a certificate: whether supports were eliminated, whether the selection is self-consistent, and whether the condensation reconstructs the full response. Any failed check prevents publication.
-6. Render the result within the checkpoint budget.
+6. Render the result within the checkpoint budget; the `## Next Step` section is always anchored (an extracted next-step atom, or a verbatim floor naming the latest request).
 
 Failures degrade step by step: a failed structural compile falls back to local rendering with no model call; a failed local render falls back to the shipped summarizer. A session is never left without a checkpoint.
+
+### Continuation across compaction
+
+A compaction must leave the successor able to continue the task, not only a smaller context. The renderer therefore treats `## Next Step` as a hard section:
+
+- The extraction instruction always asks for one `next_step` atom (the immediate action), and that atom is pinned as a structural support, so the load-bearing solve cannot eliminate it.
+- If the extractor supplies none, the renderer falls back to a deterministic floor: it quotes the latest real user request verbatim (request-time scaffolding and any prior checkpoint are stripped), or, when the span has no user message, the latest recorded assistant state. The floor is laid out first inside the checkpoint budget.
+- The certificate records `nextStepAnchored`; a checkpoint without a continuation anchor would be refused rather than published.
+
+The floor is a quote, not a model invention: the successor can read the exact latest instruction. Two limits remain. First, the guarantee is structural, not information-theoretic: it proves that a continuation anchor is present and that supports survived, not that every fact of the task survived; repeated generations may still drop detail that no atom cites. Second, retention of recent messages belongs to the shipped engine: automatic compaction keeps a retained tail verbatim, while `/compact` cuts the whole visible surface down to the checkpoint. For long autonomous runs, rely on automatic compaction when continuity of detail matters; treat `/compact` as a deep reset.
 
 ## Attachment point
 
@@ -132,7 +142,7 @@ Requires the desktop Harness with `BasicCompactionEngine` reachable in the compo
 Install the GitHub bundle with the plugin manager:
 
 ```
-target: github:2718labs/dsh-compaction-continuum#v0.3.0
+target: github:2718labs/dsh-compaction-continuum#v0.4.0
 ```
 
 For a manual installation, add the dependency and the bundle to `~/.dsh/profiles/<profile>/package.json`. The bundle must be listed after `@deepseek-ai/dsh-web-app`:
@@ -140,7 +150,7 @@ For a manual installation, add the dependency and the bundle to `~/.dsh/profiles
 ```json
 {
   "dependencies": {
-    "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.3.0"
+    "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.4.0"
   },
   "dsh": { "profile": { "bundles": ["...", "dsh-compaction-continuum"] } }
 }
@@ -178,7 +188,7 @@ Sample `/context_status` output:
 hook               : installed on @deepseek-ai/dsh-compaction-basic; active engine shipped BasicCompactionEngine (preset plane, hooked)
 trigger threshold  : 727040 tokens (ratio 0.8)
 current context    : 273740 tokens (26.1% of window, 453300 below trigger)
-last audit         : compiled mode=extract units=318 candidates=41 kept=27 checkpoint≈5837 tokens certificate={...}
+last audit         : compiled mode=extract units=318 candidates=41 kept=27 checkpoint≈5837 tokens nextStep=atom certificate={...}
 extractor call     : 312480 cached / 640 uncached input tokens
 cache accounting   : 123 requests, hit 99.24% (384347520 cached / 2935624 uncached)
 ```
@@ -230,7 +240,7 @@ node bench/report.mjs
 
 ```bash
 npm run check   # syntax
-npm test        # 80 offline assertions, no Harness installation required
+npm test        # 95 offline assertions, no Harness installation required
 node bench/report.mjs   # cache accounting over this machine's session logs
 ```
 

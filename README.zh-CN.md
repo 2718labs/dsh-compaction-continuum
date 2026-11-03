@@ -2,7 +2,7 @@
 
 [English](./README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-v0.3.0-A44742)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.4.0-A44742)](./CHANGELOG.md)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.2.1--rc.5-1F6B5B)](https://github.com/deepseek-ai)
 [![License](https://img.shields.io/badge/license-MIT-263238)](./LICENSE)
 [![CI](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml/badge.svg)](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml)
@@ -105,9 +105,19 @@ flowchart TD
 3. 将保留条目视为自由度，按来源相同、位置相邻、类型相同建立刚度；当前请求作为载荷；精确锚点与未关闭事项固定为支座。
 4. 求解 KKT 方程并执行静力凝聚，选出承重集合。
 5. 生成证书：支座是否被消去、选择是否自洽、凝聚结果能否重构完整响应。任一校验失败则不发布。
-6. 按预算渲染为 checkpoint。
+6. 按预算渲染为 checkpoint；`## Next Step` 始终有锚点（抽取出的 next_step 条目，或逐字引用最近请求的确定性兜底）。
 
 任一步骤失败时逐级降级：结构编译失败则改为纯本地渲染（不调用模型）；本地渲染失败则交还官方摘要。会话不会因压缩失败而缺少 checkpoint。
+
+### 压缩后的连续性
+
+压缩不仅要缩小上下文，还要让后继 agent 能接着做。因此渲染器把 `## Next Step` 视为硬性章节：
+
+- 抽取指令固定要求一条 `next_step` 条目（下一步动作），该条目被固定为结构支座，承重求解不能把它消去。
+- 抽取未提供时，渲染器退化为确定性兜底：逐字引用最近一条真实用户请求（剥离请求期脚手架与此前的 checkpoint）；区间内没有用户消息时，引用最近一条助手状态。兜底内容在预算内优先排版。
+- 证书记录 `nextStepAnchored`；没有续接锚点的 checkpoint 会被拒绝发布。
+
+兜底是逐字引用，不是模型编造，后继能看到最近一条指令的原文。仍有两个边界。其一，这是结构保证而非信息论保证：它证明续接锚点存在、支座未被消去，不证明任务中的每个事实都保留；多代压缩仍可能丢掉没有任何条目引用的细节。其二，近期消息的保留由官方引擎决定：自动压缩会逐字保留一段尾部，`/compact` 则把整个可见面压成 checkpoint。长任务若依赖细节连续，应依赖自动压缩；`/compact` 应视为一次深度重置。
 
 ## 挂载方式
 
@@ -132,7 +142,7 @@ flowchart TD
 使用插件管理器安装 GitHub bundle：
 
 ```
-target: github:2718labs/dsh-compaction-continuum#v0.3.0
+target: github:2718labs/dsh-compaction-continuum#v0.4.0
 ```
 
 手动安装时，在 `~/.dsh/profiles/<profile>/package.json` 中添加依赖与 bundle。bundle 必须排在 `@deepseek-ai/dsh-web-app` 之后：
@@ -140,7 +150,7 @@ target: github:2718labs/dsh-compaction-continuum#v0.3.0
 ```json
 {
   "dependencies": {
-    "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.3.0"
+    "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.4.0"
   },
   "dsh": { "profile": { "bundles": ["...", "dsh-compaction-continuum"] } }
 }
@@ -177,7 +187,7 @@ Invoke-RestMethod 'http://127.0.0.1:<端口>/compaction-continuum/selftest?test=
 hook               : installed on @deepseek-ai/dsh-compaction-basic; active engine shipped BasicCompactionEngine (preset plane, hooked)
 trigger threshold  : 727040 tokens (ratio 0.8)
 current context    : 273740 tokens (26.1% of window, 453300 below trigger)
-last audit         : compiled mode=extract units=318 candidates=41 kept=27 checkpoint≈5837 tokens certificate={...}
+last audit         : compiled mode=extract units=318 candidates=41 kept=27 checkpoint≈5837 tokens nextStep=atom certificate={...}
 extractor call     : 312480 cached / 640 uncached input tokens
 cache accounting   : 123 requests, hit 99.24% (384347520 cached / 2935624 uncached)
 ```
@@ -229,7 +239,7 @@ node bench/report.mjs
 
 ```bash
 npm run check   # 语法检查
-npm test        # 80 条离线断言，无需安装 Harness
+npm test        # 95 条离线断言，无需安装 Harness
 node bench/report.mjs   # 基于本机会话日志计算缓存账
 ```
 

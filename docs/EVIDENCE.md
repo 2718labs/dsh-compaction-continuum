@@ -119,12 +119,13 @@ Beyond cost, the plugin imposes testable constraints on what is published:
 | --- | --- | --- |
 | Detectability of a dropped critical constraint | none | constraints and anchors are pinned as supports; publication is refused if one is lost (tested) |
 | Traceability of content | none | every item must quote the source verbatim; unlocatable items are discarded |
+| Continuation anchor for the successor | a model-written "Next Step" section, no structural guarantee | an extracted `next_step` atom pinned as a support, else a verbatim floor naming the latest request; recorded as `nextStepAnchored` (tested across three successive generations) |
 | Behaviour on compaction failure | throws; a session may end up without a checkpoint | three-level fallback: structural → local render → shipped summarizer |
 | Render determinism | model-dependent | byte-identical for identical input |
 
 Measured shipped summaries are 1,728 to 5,131 tokens long. This plugin's checkpoint is bounded by `checkpointMaxTokens` (default 6,000) and contains only verifiable material.
 
-The offline suite contains 80 assertions covering: rejection of invented and paraphrased quotes, rejection of lost supports, reporting of ungrounded structures, rejection of checkpoints that cannot shrink the source, degradation on extractor failure, absence of model calls in `deterministic` mode, and byte-identical rendering.
+The offline suite contains 95 assertions covering: rejection of invented and paraphrased quotes, rejection of lost supports, reporting of ungrounded structures, rejection of checkpoints that cannot shrink the source, degradation on extractor failure, absence of model calls in `deterministic` mode, byte-identical rendering, and continuation anchoring across three successive compaction generations.
 
 ## 8. Additional observations
 
@@ -156,7 +157,7 @@ In this case the cache had genuinely expired (about 49 minutes since the precedi
 ## 10. Reproduction
 
 ```bash
-npm test                                   # 80 offline assertions, no Harness installation required
+npm test                                   # 95 offline assertions, no Harness installation required
 node bench/report.mjs                      # account this machine's sessions
 node bench/report.mjs <dir> --format md    # render tables in the same format as this report
 node bench/report.mjs --format json        # raw data

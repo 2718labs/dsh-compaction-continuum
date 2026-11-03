@@ -13,6 +13,12 @@ function checkTrue(name, value, detail = "") {
 function checkLine(name, text, needle) {
   checkTrue(`${name} contains ${JSON.stringify(needle)}`, text.includes(needle));
 }
+function section(text, heading) {
+  const start = text.indexOf(`## ${heading}`);
+  if (start < 0) return "";
+  const rest = text.indexOf("\n## ", start + 1);
+  return text.slice(start, rest < 0 ? undefined : rest);
+}
 
 const messages = [
   { role: "system", content: [{ type: "text", text: "You are a coding agent. Tools: read, edit, bash." }] },
@@ -136,6 +142,11 @@ const deterministic = await compileCheckpoint(
 );
 checkTrue("deterministic mode never calls the model", deterministicCalls === 0, `calls=${deterministicCalls}`);
 checkTrue("deterministic mode still produces a checkpoint", deterministic.text.length > 0);
+checkTrue(
+  "deterministic mode anchors a next step",
+  deterministic.audit.certificate.nextStepAnchored === true && section(deterministic.text, "Next Step").includes("Continue the latest request"),
+  JSON.stringify(section(deterministic.text, "Next Step")),
+);
 
 // --- garbage extraction degrades to deterministic ----------------------------
 const degraded = await compileCheckpoint(
@@ -186,6 +197,110 @@ checkTrue(
   withCall.audit.extractor?.usage?.cacheReadTokens === 900,
   JSON.stringify(withCall.audit.extractor),
 );
+
+// --- continuation: the Next Step section is never empty ----------------------
+checkTrue(
+  "extracted checkpoints quote the latest request when no next-step atom exists",
+  section(extractResult.text, "Next Step").includes('"继续。"'),
+  JSON.stringify(section(extractResult.text, "Next Step")),
+);
+checkTrue("audit reports the deterministic floor source", extractResult.audit.nextStepSource === "latest-request", String(extractResult.audit.nextStepSource));
+checkTrue("certificate records the next-step anchor", extractResult.audit.certificate.nextStepAnchored === true);
+
+const withNextStep = JSON.stringify({
+  atoms: [
+    ...JSON.parse(extraction).atoms,
+    { kind: "next_step", text: "把静态数组改为 registerLazy() 并保留 health 顺序", quote: "下一步是把数组转成 registerLazy()" },
+  ],
+});
+const stepped = await compileCheckpoint(
+  { messages },
+  { mode: "extract", checkpointMaxTokens: 400, queryText: "继续改 router.ts", callModel: async () => withNextStep },
+);
+checkTrue("a next-step atom is reported as the anchor source", stepped.audit.nextStepSource === "atom", String(stepped.audit.nextStepSource));
+checkLine("next-step checkpoint", section(stepped.text, "Next Step"), "registerLazy()");
+
+// --- the floor strips request-time scaffolding --------------------------------
+const scaffolded = [
+  ...messages,
+  {
+    role: "user",
+    content: [{
+      type: "text",
+      text: "继续完成迁移。\n\nCurrent runtime context. This request-time snapshot must not become the next step.\n<system-reminder>tool catalog changed</system-reminder>",
+    }],
+  },
+];
+const scaffoldResult = await compileCheckpoint(
+  { messages: scaffolded },
+  { mode: "deterministic", checkpointMaxTokens: 1200, queryText: "继续" },
+);
+const scaffoldStep = section(scaffoldResult.text, "Next Step");
+checkTrue(
+  "the floor quotes the request, not its scaffolding",
+  scaffoldStep.includes("继续完成迁移。") && !scaffoldStep.includes("Current runtime context"),
+  JSON.stringify(scaffoldStep),
+);
+
+// --- span without a user message anchors the latest state --------------------
+const assistantOnly = [
+  { role: "system", content: [{ type: "text", text: "You are a coding agent." }] },
+  {
+    role: "assistant",
+    content: [{
+      type: "text",
+      text: Array.from(
+        { length: 12 },
+        (_, index) => `第 ${index} 步：检查 G:/proj/src/router.ts 的静态路由表并记录 /api/health 的顺序约束。`,
+      ).join("\n"),
+    }],
+  },
+  { role: "tool", content: [{ type: "text", text: "test output: 3 passed, 0 failed" }] },
+];
+const stateResult = await compileCheckpoint({ messages: assistantOnly }, { mode: "deterministic", checkpointMaxTokens: 1200, queryText: "" });
+checkTrue(
+  "no-user spans anchor the latest recorded state",
+  section(stateResult.text, "Next Step").includes("Continue from the latest recorded state"),
+  JSON.stringify(section(stateResult.text, "Next Step")),
+);
+checkTrue("audit reports the latest-state source", stateResult.audit.nextStepSource === "latest-state", String(stateResult.audit.nextStepSource));
+
+// --- long task: the next step survives repeated generations ------------------
+let generationMessages = [...messages];
+for (let generation = 1; generation <= 3; generation += 1) {
+  const request = `继续第 ${generation} 阶段：保持 /api/health 顺序。`;
+  const progress = `进度：第 ${generation} 阶段完成，G:/proj/src/router.ts 已改到第 ${generation} 步。`;
+  const span = [
+    ...generationMessages,
+    { role: "assistant", content: [{ type: "text", text: progress }] },
+    { role: "user", content: [{ type: "text", text: request }] },
+  ];
+  const atoms = JSON.stringify({
+    atoms: [
+      { kind: "progress", text: `第 ${generation} 阶段完成`, quote: `第 ${generation} 阶段完成` },
+      { kind: "anchor", text: "目标文件", quote: "G:/proj/src/router.ts" },
+      { kind: "constraint", text: "保留 /api/health 顺序", quote: "保持 /api/health 顺序" },
+      { kind: "goal", text: `继续第 ${generation} 阶段`, quote: `继续第 ${generation} 阶段` },
+    ],
+  });
+  const result = await compileCheckpoint(
+    { messages: span },
+    { mode: "extract", checkpointMaxTokens: 600, queryText: request, callModel: async () => atoms },
+  );
+  const step = section(result.text, "Next Step");
+  checkTrue(`generation ${generation} keeps the next step`, step.includes(`继续第 ${generation} 阶段`), JSON.stringify(step));
+  checkTrue(`generation ${generation} certificates the continuation`, result.audit.certificate.nextStepAnchored === true);
+  generationMessages = [
+    { role: "system", content: messages[0].content },
+    {
+      role: "user",
+      content: [{
+        type: "text",
+        text: `This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.\n\n<compacted-summary>\n${result.text}\n</compacted-summary>`,
+      }],
+    },
+  ];
+}
 
 console.log(failures === 0 ? "\nALL PIPELINE CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exitCode = failures === 0 ? 0 : 1;

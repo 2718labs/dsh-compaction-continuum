@@ -1,6 +1,6 @@
 {
   "name": "dsh-compaction-continuum",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Structural Compression (结构性压缩) for DeepSeek Harness context: one cited-atom extraction call, a structural-mechanics solve, and a deterministic checkpoint with reconstruction certificates.",
   "private": false,
   "type": "module",
