@@ -31,6 +31,6 @@ You will get an initial response within a reasonable time; this is a small volun
 Two loopback-only, unauthenticated endpoints are registered when `statusCommands` is enabled:
 
 - `GET /compaction-continuum/ping` — version, policy and cache counters.
-- `GET /compaction-continuum/selftest` — counts, policy, hook identity, failure stacks, and the projection-alignment check. `?test=extract` additionally performs one small synthetic model call.
+- `GET /compaction-continuum/selftest` — counts, policy, hook identity, failure stacks, and the projection-alignment check. `?test=extract` runs one small synthetic model call on a built-in fixture. `?test=replay` rebuilds the most recent recorded compaction span from the live session and runs one real model call on it; that span is session content, so only run this if that content may be sent to the model provider. Neither test publishes anything.
 
-Neither returns conversation content. They do expose opaque session identifiers to anything that can reach the loopback port; on a shared machine, set `statusCommands: false` if that is not acceptable. Set `mode: off` to keep the plugin loaded but fully hand compression back to the shipped summarizer.
+Neither returns conversation content in its response. They do expose opaque session identifiers to anything that can reach the loopback port; on a shared machine, set `statusCommands: false` if that is not acceptable. Set `mode: off` to keep the plugin loaded but fully hand compression back to the shipped summarizer.

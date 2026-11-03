@@ -31,6 +31,6 @@
 `statusCommands: true` 时会注册两个**仅回环、无鉴权**的端点：
 
 - `GET /compaction-continuum/ping` —— 版本、策略、缓存计数。
-- `GET /compaction-continuum/selftest` —— 计数、策略、钩子身份、失败栈、投影一致性检查；加 `?test=extract` 会额外做一次很小的合成模型调用。
+- `GET /compaction-continuum/selftest` —— 计数、策略、钩子身份、失败栈、投影一致性检查；`?test=extract` 用内置夹具做一次很小的合成模型调用；`?test=replay` 会重建会话中最近一次压缩的跨度并对其做一次真实模型调用，该跨度属于会话内容，仅在确认可发送给模型服务商时使用。两种测试都不发布任何内容。
 
-两者都不返回会话内容，但会把不透明的会话 ID 暴露给任何能访问回环端口的进程。共享机器上如果不接受这一点，请设 `statusCommands: false`；只想停用压缩器而保留插件，请设 `mode: off`。
+两者都不在响应中返回会话内容，但会把不透明的会话 ID 暴露给任何能访问回环端口的进程。共享机器上如果不接受这一点，请设 `statusCommands: false`；只想停用压缩器而保留插件，请设 `mode: off`。

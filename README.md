@@ -11,9 +11,34 @@ A context-compaction backend for DeepSeek Harness, maintained by 2718Labs. The p
 
 The compaction backend shipped with Harness asks a model to read the history and write a summary, which is then written back into the context. This plugin takes a different route: it extracts items with verbatim citations from the source, computes the load-bearing relations between them, and keeps only the items that are load-bearing and verifiable against the source. The compression ratio is comparable to the shipped backend; the difference is that the published content is traceable.
 
-## Measured compaction cost
+## Measured results (plugin installed)
 
-The measurement was carried out to determine the cost structure of compaction. Data source: 25 session logs from a single machine, 3,515 requests, 997,002,631 prompt tokens. Method, definitions and reproduction steps are in [the measurement report](./docs/EVIDENCE.md).
+The figures below were measured after installing this plugin; the object of measurement is the plugin, not the shipped backend.
+
+Precondition: the self-test reports `backendUsesHookedSummarize: true`, meaning the preset-plane shipped engine instance is already running this compressor.
+
+| Observation | Measured value |
+| --- | --- |
+| Backend | shipped `BasicCompactionEngine` instance with `summarize` replaced |
+| Replayed span | 366 messages (system + 365 shadowed nodes), 41 tools |
+| Extraction call | 333,184 cached input / 468 uncached input / 9,954 output tokens |
+| Extraction duration | 47.6 s |
+| Structural compile | 365 candidates, 46 retained |
+| Checkpoint | 2,243 characters, approximately 1,121 tokens (audit recorded 1,076 tokens) |
+| Certificate | supports preserved, selection consistent, condensation reconstructs — all true; reconstruction error 0 |
+| Fallbacks | none |
+
+On the same span, the shipped backend had previously published a 20,011-character summary (approximately 5,131 tokens). The plugin produced 2,243 characters, every item traceable to a verbatim source quote.
+
+Method and limitations:
+
+- This is a replay measurement: the most recent recorded compaction span in the session is rebuilt and passed through one `summarize` call, reporting actual usage and output, without publishing anything. It therefore measures extraction cost and the checkpoint, not publication cost.
+- The replays prefix matched a provider cache entry (333,184 tokens) because that prefix had been sent by real requests before. Whether the cache is still valid depends on the provider's retention policy; with a cold cache the call costs approximately one full prompt read.
+- Publication cost requires a real compaction and the request that follows it: run `/compact`, then `node bench/report.mjs`; the event whose `backend` column reads `continuum` is the plugin's real record.
+
+## Shipped backend baseline (reference)
+
+The figures below describe the shipped backend and are included as a design reference. They are not measurements of this plugin.
 
 | Observation | Measured value |
 | --- | --- |
@@ -27,10 +52,10 @@ This cache behavior follows from a difference between the replayed request and t
 
 The plugin therefore provides two modes:
 
-- `deterministic`: no model call during compaction, structural selection only. On the three measured compactions the additional input drops to approximately 170,000 tokens (about 0.25×).
-- `extract`: one model call, at approximately the same cost as the shipped backend. The difference is that every item in the result traces back to the source, and publication is refused when a critical constraint would be lost.
+- `deterministic`: no model call during compaction, structural selection only. Against the shipped baseline, the additional input drops to approximately 170,000 tokens (about 0.25×).
+- `extract`: one model call. The difference from the shipped backend is that every item in the result traces back to the source, and publication is refused when a critical constraint would be lost.
 
-`extract` mode does not reduce model-call cost. The replay request built at compaction time is not byte-identical to the request that was actually sent; part of the request-time content is not in the session log, so the preceding cache cannot be reused. This is an inherent cost of replay-based summarization, and this plugin shares it. Making that call effectively free requires request-time information that the log does not contain; it is not implemented and is listed on the roadmap.
+The cost of `extract` mode depends on whether the replayed prefix hits the cache: on a hit it is close to output-only cost (468 uncached input tokens in the measurement above); on a miss it is approximately one full prompt read. Making the cold case cheap as well requires request-time information that the log does not contain; it is not implemented and is listed on the roadmap.
 
 ## Output example
 
@@ -122,6 +147,22 @@ For a manual installation, add the dependency and the bundle to `~/.dsh/profiles
 ```
 
 After installation, run `/context_status` in a session, or request `http://127.0.0.1:<port>/compaction-continuum/ping`. The port is the one printed by `dsh web`.
+
+Diagnostics and measurement commands:
+
+```powershell
+# Read-only diagnosis; no model call
+Invoke-RestMethod 'http://127.0.0.1:<port>/compaction-continuum/selftest' | ConvertTo-Json -Depth 8
+
+# Extraction contract; one small synthetic model call
+Invoke-RestMethod 'http://127.0.0.1:<port>/compaction-continuum/selftest?test=extract' |
+  Select-Object -Expand probes | Where-Object name -eq 'extraction contract' | Select-Object -Expand value
+
+# Plugin measurement: replay the most recent recorded compaction span; reads and sends that
+# session content to the model, publishes nothing
+Invoke-RestMethod 'http://127.0.0.1:<port>/compaction-continuum/selftest?test=replay' |
+  Select-Object -Expand probes | Where-Object name -eq 'replayed span' | Select-Object -Expand value
+```
 
 ## Commands
 

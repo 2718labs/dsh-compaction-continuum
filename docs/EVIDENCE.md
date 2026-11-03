@@ -18,6 +18,28 @@ This cache behavior follows from a difference between the replayed request and t
 - The three compactions together account for 5.3% of that session's input cost. With `deterministic` mode the figure would be 1.2%.
 - Tool-result pruning in the same session freed 141,041 tokens and forced 1,675,192 additional tokens of reading.
 
+## Plugin-installed measurement
+
+The figures below were measured after installing this plugin; the object of measurement is the plugin's compressor. Precondition: the self-test reports `backendUsesHookedSummarize: true`.
+
+| Observation | Measured value |
+| --- | --- |
+| Replayed span | 366 messages (system + 365 shadowed nodes), 41 tools |
+| Extraction call | 333,184 cached input / 468 uncached input / 9,954 output tokens |
+| Extraction duration | 47.6 s |
+| Structural compile | 365 candidates, 46 retained |
+| Checkpoint | 2,243 characters, approximately 1,121 tokens (audit recorded 1,076 tokens) |
+| Certificate | supports preserved, selection consistent, condensation reconstructs — all true; reconstruction error 0 |
+| Fallbacks | none |
+| Shipped summary for the same span (reference) | 20,011 characters, approximately 5,131 tokens |
+
+Method and limitations:
+
+- This is a replay measurement: the most recent recorded compaction span in the session is rebuilt and passed through one `summarize` call, reporting actual usage and output without publishing anything. Publication cost — the re-read of the new prefix by the first request after a real compaction — is therefore not included.
+- The replays prefix matched a provider cache entry (333,184 tokens) because that prefix had been sent by real requests before; whether it remains valid depends on the provider's retention policy. With a cold cache the call costs approximately one full prompt read.
+- Publication cost is measured after a real compaction: run `/compact`, then `node bench/report.mjs`; the event whose `backend` column reads `continuum` is the plugin's real record.
+- Reproduction: `Invoke-RestMethod 'http://127.0.0.1:<port>/compaction-continuum/selftest?test=replay'`. The call reads the recorded compaction span from the session and sends it to the model; confirm that this data may be sent before running it.
+
 ## 1. Objective and scope
 
 The measurement answers three questions:
