@@ -19,21 +19,19 @@ The shipped compaction engine still owns everything durable — the bracket, the
 
 ## Why this exists (measured)
 
-Compaction is rare but expensive, and the measured dominant cost is not "writing a summary" — it is a model call that cannot hit the provider cache. Measured on 25 recorded sessions, 3,515 requests and 997M prompt tokens ([full evidence and method](./docs/EVIDENCE.md)):
+Compaction is rare, but the shipped one is expensive in a way that is easy to miss: it makes the model **re-read about 550,000 tokens of history at full price** — even when the cache is hot.
 
-| Finding | Measured value |
-| --- | --- |
-| Steady-state prefix-cache hit rate | 99.20% |
-| One shipped automatic compaction | ~721k – 734k miss-equivalent (3 events) |
-| ↳ of which the summarizing call | ~549k – 563k uncached input, cache read 0 – 9,856 tokens |
-| ↳ of which the publication re-read | ~162k – 181k miss-equivalent |
-| The request just before each compaction | 99.07% – 99.93% cached, 0.1 – 12.8 s earlier |
-| Tool-result pruning (3 runs) | freed 141k tokens, caused 1.68M miss-equivalent of re-read |
+| Case | Extra input cost | Relative |
+| --- | --- | --- |
+| Shipped automatic compaction, once | ~720,000 tokens (≈550k avoidable re-read + ~170k unavoidable publication) | 1× |
+| This plugin, `deterministic` mode | ~170,000 tokens (no model call at all) | **~0.25×** |
+| This plugin, `extract` mode | ~720,000 tokens | ~1×, but cited and certified |
 
-The summarizer request replays the durable prefix, but the live request carries request-time material the log cannot reproduce, so the cached part ends after the system/tools head. Any replay-based summarizer pays that. This backend therefore treats the model call as **optional**:
+The second half is quality, and it is the main point: the shipped output is free-form prose with no provenance. This plugin publishes only material traceable to a verbatim source quote, pins constraints and anchors so publication is refused when one would be lost, and always leaves a session with a checkpoint.
 
-- `mode: deterministic` — **no model call at all**; on the measured events the compaction cost drops from ~727k to the publication only (~165k–185k), ~4× cheaper, at the price of semantic atoms.
-- `mode: extract` — one call, cost parity with the shipped summarizer, but the published checkpoint is traceable to verified quotes and carries a condensation certificate.
+Why can't the shipped call use the cache? The request right before each measured compaction hit 99.07%–99.93% and was 0.1–12.8 s old, yet the summarizer request matched only the first 9,856 cached tokens. A replay cannot reproduce request-time material the durable log does not record. `extract` mode shares that replay, so it claims **parity, not savings**.
+
+Full tables, method and honest limitations: [docs/EVIDENCE.md](./docs/EVIDENCE.md). Reproduce on your own logs with `node bench/report.mjs`.
 
 ## Status
 
@@ -175,18 +173,20 @@ The plugin row configures the **compressor**; the compaction policy (threshold, 
 
 Keys that only apply when this plugin is itself the `compaction` provider (non-desktop compositions) follow the shipped backend: `thresholdRatio`, `headroomTokens`, `retainTokens`, `retainRatio`, `maxTokens`, `summarizationProvider/Model`, `compactionRetries`, `maxOverflowRetries`, `modelPolicies`, `auto`. On the desktop, the preset engine's own policy is what runs; `/context_status` reports the resolved values.
 
-## Cache economics
+## Cache economics (details)
 
-Measured with the shipped backend on the logged sessions — see [docs/EVIDENCE.md](./docs/EVIDENCE.md) for method, per-event tables and limitations:
+The full method, per-event tables and caveats live in [docs/EVIDENCE.md](./docs/EVIDENCE.md). Short version, measured on the shipped backend:
 
 | Observation | Value |
 | --- | --- |
-| Steady-state prefix-cache hit rate | 99.20% over 3,515 requests / 997M prompt tokens |
-| One-time publication re-read after a compaction | one full read of the new prefix, unavoidable for any rewrite (~162k–181k miss-equivalent on the measured automatic events) |
-| Summarizing call right before each of those events | cold: 0 / 9,856 / 9,856 cached of ~550k–563k, despite a 99%+ hot request 0.1–12.8 s earlier |
-| Manual `/compact` after a long idle gap | 331,799 uncached for the summary call (expired cache; no design avoids it) |
-| Compaction replay vs. the durable surface projection | identical: `live=399 replayed=399 identical=true` — it diverges from the *live request*, not from the log |
-| Tool-result pruning (`tool-result-pruner`) | freed 141,041 tokens, caused 1,675,192 miss-equivalent of re-read — why this compressor adds no pruning (the desktop preset still mounts the shipped pruner, which this plugin does not control) |
+| Steady-state cache hit rate (25 sessions / 3,515 requests / 997M prompt tokens) | 99.20% |
+| Cost of one shipped automatic compaction | ~720k extra input tokens: ~550k a summarizer re-read that could be avoided + ~170k the re-read any rewrite pays |
+| Summarizer call in those events | matched only 0–9,856 cached tokens of its ~550k prompt, despite a 99%+ hot request 0.1–12.8 s earlier |
+| Manual `/compact` after a long idle | summary call paid 331,799 uncached tokens (cache really expired — unavoidable) |
+| Replay vs. the durable surface projection | identical (`live=399 replayed=399`); it diverges from the *live request*, not from the log |
+| Tool-result pruning (`tool-result-pruner`) | freed 141,041 tokens, caused 1,675,192 tokens of re-read (~12×) — why this compressor adds no pruning (the desktop preset still mounts the shipped pruner, which this plugin does not control) |
+
+("Extra input tokens" counts cached reads at 10% of a fresh read, matching the provider's documented cache discount; change it in `bench` with `--hit-ratio`.)
 
 Hard rules the implementation keeps: one publication per epoch; never rewrite mid-history; prefer a deep cut over frequent shallow ones; drive compaction by window pressure, not by turn count; never summarize a cold prefix deliberately; make the summarizing call optional.
 
