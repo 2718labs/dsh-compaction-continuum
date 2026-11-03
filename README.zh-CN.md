@@ -7,74 +7,69 @@
 [![License](https://img.shields.io/badge/license-MIT-263238)](./LICENSE)
 [![CI](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml/badge.svg)](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml)
 
-**结构性压缩 · Structural Compression** —— DeepSeek Harness 的上下文压缩后端。
+DeepSeek Harness 的上下文压缩后端。中文名结构性压缩，英文 Structural Compression。
 
-> 像结构一样压缩，而不是像摘要一样压缩。
->
-> 模型只允许引用；承载与否由算术决定。
+Harness 自带的压缩是让模型把历史读一遍、写一段摘要，然后把摘要塞回上下文。这个插件换了个做法：从原文里抽带逐字引文的句子，算一遍它们之间的"承重关系"，只把承重的、并且能对回原文的内容留下来。压缩量差不多，但发出去的东西你能查证。
 
-它不请模型写自由摘要，而是把对话当成一栋结构：候选块是自由度，证据耦合是刚度，当前提问是载荷，精确锚点与未关闭事项是支座，压缩就是一次**静力凝聚**——保留承载自由度、消去其余，并且在发布前给出重构证书。checkpoint 由"已核验为原文子串"的引文确定性拼装，从不出现模型自由撰写的正文。
+## 我为什么写这个
 
-官方引擎仍然拥有全部持久化语义：事务、锁、溢出恢复、保留尾部、重放。本插件只替换"checkpoint 内容怎么产生"。
+动手之前我先算了笔账。长会话里压缩很少发生，但每次都很贵，我想弄清楚贵在哪。拿自己机器上 25 个会话的日志统计（3,515 次请求、9.97 亿 prompt token）：
 
-## 为什么需要它（实测）
+- 平时缓存命中率 99.20%，这部分很便宜。
+- 但官方每压一次，模型要按新内容的价格重读约 55 万 token 的历史。
+- 怎么确认是重读而不是缓存过期：压缩前那一次请求命中 99.85%，只隔 0.1 秒；摘要请求却只命中开头 9,856 个 token。
 
-压缩很少发生，但官方这次很贵，而且贵在一个不容易注意的地方：它会**按全价把约 55 万 token 的历史重新读一遍**——哪怕缓存明明还是热的。
+55 万 token 大概是一本 400 页的书。每压一次，等于让它把这本书重读一遍。
 
-| 场景 | 额外输入成本 | 相对 |
-| --- | --- | --- |
-| 官方自动压缩一次 | 约 72 万 token（约 55 万本可避免的重读 + 约 17 万必然的发布重读） | 1× |
-| 本插件 `deterministic` | 约 17 万 token（零模型调用） | **≈0.25×** |
-| 本插件 `extract` | 约 72 万 token | ≈1×，但带引文与证书 |
+我本来想让抽取调用也吃到缓存，试了，做不到：压缩时重放出来的请求和当时真实发出去的请求对不上，线上请求里有些日志没记的东西。所以现在给两条路：
 
-另一半是质量，而且这才是重点：官方输出是没有出处的自由散文；本插件只发布会能对回原文逐字引用的内容，把关键约束/锚点钉为支座（丢失就拒绝发布），并且永远给会话留下 checkpoint。
+- **`deterministic`**：压缩时完全不调模型，只做结构筛选。省掉那 55 万，代价是压出来的东西比较糙。
+- **`extract`**：还是调一次模型，成本跟官方基本一样；但压缩结果里每一条都能追溯到原文，关键约束丢了会拒绝发布。
 
-为什么官方接不上缓存？实测三次压缩前的那次请求命中率 99.07%–99.93%、只隔 0.1–12.8 秒，而摘要请求只命中开头 9,856 个 token。重放无法复现只存在于请求当时、日志里没有的东西。`extract` 模式用的是同样的重放，所以我们只主张**成本持平，不主张省钱**。
+我自用开的是 `extract`，因为压缩后的内容我敢信。如果你更在意账单，`deterministic` 每次能省掉大约四分之三的输入。
 
-完整表格、方法与诚实的局限：[docs/EVIDENCE.zh-CN.md](./docs/EVIDENCE.zh-CN.md)。用自己的日志复现：`node bench/report.mjs`。
+## 压出来长什么样
 
-## 状态
-
-- `0.3.0`，首个公开版本，已在 DeepSeek Harness `0.2.1-rc.5`（打包桌面版，Windows）上验证。
-- 它是普通 Host bundle，不修改 Harness 本体。
-- 压缩器安装在官方后端唯一被文档化的定制钩子上，卸载时还原。该 seam 若在未来版本变形，插件 fail-open 回官方摘要，而不是弄坏会话。
-
-## 它做什么
-
-一次模型调用 + 纯本地算术：
+用测试夹具的主题示意一下渲染结果（不是真实会话，格式是渲染器真实输出）：
 
 ```
-被遮蔽段
- └─ 1 次模型调用：抽取"带引文的原子" {kind, text, unit, 逐字 quote}
-       └ 机械校验：quote 必须逐字出现在重放原文里，找不到就丢弃该 atom
- └─ 建结构：atom=自由度；共享来源/相邻/同类=刚度；当前提问=载荷；锚点/未关闭事项=支座
- └─ 求解  [K Cᵀ; C 0][u;λ] = [f;d]（KKT）
- └─ 静力凝聚：保留承载自由度、消去其余，并导出重构算子
- └─ 证书：支座未消去、选出的一致、凝聚可重构完整响应——否则不发布
- └─ 确定性渲染：按预算打包保留的 atom → checkpoint
+## Primary Request and Intent
+- 把 router.ts 的静态路由表改成惰性注册，保留 /api/health
+- 用户提示：别破坏缓存率
+
+## Critical Context
+- 必须保留 /api/health
+- 决定：分阶段惰性注册，避免改动 /api/health
+
+## Verbatim Anchors
+- 目标文件 — "G:/proj/src/router.ts"
+- E_ROUTE_DUP 在 registry.ts:88 — "E_ROUTE_DUP"
 ```
 
-**fail-open 阶梯**：结构编译 → 确定性渲染（零模型调用）→ 官方 LLM 摘要。会话永远有 checkpoint。
+带引号的那部分是原文的逐字引用。引文如果在原文里找不到，这条就进不了 checkpoint。模型只负责"挑句子并抄下来"，收尾的排版、预算控制、丢掉哪些，都是本地算的。
 
-抽取调用重放的是会话自己的**持久**前缀——同一 system prompt、同一工具目录、同一段已记录历史，只在尾部追加指令；不引入专门的摘要 system prompt，也不换模型。实测注意：线上请求里有日志不记录的请求期材料，因此这次重放的命中部分止于 system/tools 头部（实测 0 – 9,856 / ~550k token）。这就是 `extract` 模式只主张成本持平、以及为什么存在零模型调用的 `deterministic` 模式。
+## 它怎么工作
 
-## 它挂在哪（重要）
+一次压缩大概是这样：
 
-桌面版把压缩后端放进 **agent preset 平面**：每个 preset 在隔离的 `compaction` 服务组里自带一个官方 `@deepseek-ai/dsh-compaction-basic`，Host 平面的 provider 对它不可见。两个平面共享的唯一 seam 是官方引擎唯一被文档化的子类钩子：
+1. 把要压的历史（连同 system prompt 和工具列表）原样重放给模型，末尾加一句指令，让它输出 JSON：每条一个 kind、一句摘要、以及一句必须在原文里逐字出现的 quote。
+2. 本地校验每个 quote。找不到的丢弃，编造的丢弃。
+3. 把留下的条目当自由度，来源相同的、相邻的、同类的连成刚度；当前提问当载荷；精确锚点和未关闭事项钉成支座。
+4. 解一次 KKT，做静力凝聚，选出承重的那些。
+5. 出证书：支座有没有被消掉、选的有没有自相矛盾、凝聚回去还是不是原来那个响应。任何一项不过就不发布。
+6. 按预算渲染成 checkpoint。
 
-```
-BasicCompactionEngine.prototype.summarize
-  └─ regionDependencies() 每次压缩都动态走 this.summarize(...)
-       └─ 已换成：抽取 → 结构 → 凝聚 → 确定性渲染
-```
+任何一步出错都会往下退：结构算失败就纯本地渲染（不调模型），本地渲染也不行就交回官方摘要。会话不会因为压缩失败而没有 checkpoint。
 
-由此：
+## 它挂在 Harness 的哪里
 
-- 官方引擎的事务、空闲准入、溢出恢复、保留尾部策略、warm-prefix 重放全部按原样保留；
-- 插件加载时安装替换，卸载时还原；
-- 插件同时挂一个 Host 平面的 `compaction` provider，让没有 preset 平面的组合也能正常工作。
+这块要知道一下，因为它跟"正常插件"的挂法不一样。
 
-用自检确认当前生效的是哪个后端：
+桌面版把压缩后端放进了每个 agent preset 自己的隔离域里，Host 平面挂的 `compaction` 服务它看不见。所以插件没有去注册第二个 `compaction` 提供者，而是替换了官方引擎唯一对外承认的扩展点：`BasicCompactionEngine.prototype.summarize`。这个方法是官方压缩流程每次都会动态调的，换掉它，preset 平面的引擎也会走本插件的压缩器；官方的事务、锁、溢出恢复、保留尾部、重放都原样保留。插件卸载时会把原型方法还回去。
+
+另外插件也在 Host 平面挂了一个 `compaction`，这样没有 preset 平面的组合也能正常用。
+
+装完后跑自检，能看到实际生效的是哪个后端：
 
 ```json
 "hook": {
@@ -86,67 +81,42 @@ BasicCompactionEngine.prototype.summarize
 
 ## 安装
 
-要求：组合里暴露 `BasicCompactionEngine` seam 的 DeepSeek Harness 桌面版（已在 `0.2.1-rc.5` 验证），以及 profile 的写权限。
+需要桌面版 Harness，且组合里能拿到 `BasicCompactionEngine` 这个类（`0.2.1-rc.5` 上验证过）。
 
-### 用插件管理器
-
-像其它 profile bundle 一样，从 GitHub spec 安装：
+用插件管理器，把 GitHub 地址当 bundle 装：
 
 ```
 target: github:2718labs/dsh-compaction-continuum#v0.3.0
 ```
 
-建议锁 tag 或 commit。管理器会添加依赖、追加到 `dsh.profile.bundles`，并热应用补丁。
-
-### 手动
-
-在 `~/.dsh/profiles/<profile>/package.json`：
+手动的话，在 `~/.dsh/profiles/<profile>/package.json` 里加依赖和 bundle，bundle 要排在 `@deepseek-ai/dsh-web-app` 后面：
 
 ```json
 {
   "dependencies": {
     "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.3.0"
   },
-  "dsh": {
-    "profile": {
-      "bundles": ["...", "dsh-compaction-continuum"]
-    }
-  }
+  "dsh": { "profile": { "bundles": ["...", "dsh-compaction-continuum"] } }
 }
 ```
 
-bundle 必须排在 `@deepseek-ai/dsh-web-app` **之后**，让补丁在 web 层关闭出厂后端行之后再应用。
+装完在会话里发 `/context_status`，或者直接访问 `http://127.0.0.1:<端口>/compaction-continuum/ping`。
 
-### 验证
-
-```powershell
-# 存活 + 策略 + 钩子（回环、无需登录）
-Invoke-WebRequest http://127.0.0.1:48483/compaction-continuum/ping -UseBasicParsing | Select-Object -Expand Content
-
-# 完整无内容诊断
-Invoke-RestMethod http://127.0.0.1:48483/compaction-continuum/selftest | ConvertTo-Json -Depth 8
-
-# 端到端抽取契约：一次很小的合成模型调用，不读会话、不发布
-Invoke-RestMethod 'http://127.0.0.1:48483/compaction-continuum/selftest?test=extract' |
-  Select-Object -Expand probes | Where-Object name -eq 'extraction contract' | Select-Object -Expand value
-```
-
-把 `48483` 换成 `dsh web` 打印的端口。
+端口就是 `dsh web` 给你的那个，我这里是 48483。
 
 ## 命令
 
-| 命令 | 作用 |
+| 命令 | 干什么 |
 | --- | --- |
-| `/compact` | 立刻压缩当前会话。桌面端 preset 自带的同名命令会走到已挂钩的后端；本插件也注册了同名回退。 |
-| `/context_status` | 压力、触发阈值、保留量、生效引擎、最近审计、抽取调用的缓存账、真实缓存命中率。无内容。 |
-| `/context_inspect` | 无内容账本：切点 seq、发布代价、结构审计与证书结果。 |
+| `/compact` | 立刻压一次。桌面端 preset 自带的同名命令会走到本插件的压缩器；插件自己也注册了一个同名回退。 |
+| `/context_status` | 当前上下文多大、什么时候触发压缩、上次压缩的账、真实的缓存命中率。不输出对话内容。 |
+| `/context_inspect` | 压缩账本：切了哪些段、发布花了多少、结构审计和证书结果。 |
 
-`/context_status` 样例：
+`/context_status` 大概长这样：
 
 ```
 hook               : installed on @deepseek-ai/dsh-compaction-basic; active engine shipped BasicCompactionEngine (preset plane, hooked)
 trigger threshold  : 727040 tokens (ratio 0.8)
-retained verbatim  : 126812 tokens on automatic compaction; manual /compact cuts deeper
 current context    : 273740 tokens (26.1% of window, 453300 below trigger)
 last audit         : compiled mode=extract units=318 candidates=41 kept=27 checkpoint≈5837 tokens certificate={...}
 extractor call     : 312480 cached / 640 uncached input tokens
@@ -155,70 +125,72 @@ cache accounting   : 123 requests, hit 99.24% (384347520 cached / 2935624 uncach
 
 ## 配置
 
-插件行配置的是**压缩器**；压缩策略（阈值、保留尾部）属于运行它的后端引擎：
+插件这行的配置只管压缩器；压缩阈值和保留多少原文，归实际运行它的那个官方引擎。
 
 | 键 | 默认 | 含义 |
 | --- | --- | --- |
-| `mode` | `extract` | `extract`（一次抽取调用 + 结构）/ `deterministic`（零模型调用）/ `off`（完全交还原官方摘要） |
-| `extractorMaxTokens` | `12000` | 抽取调用输出上限 |
+| `mode` | `extract` | `extract` 调一次模型；`deterministic` 完全本地；`off` 交回官方摘要 |
+| `extractorMaxTokens` | `12000` | 抽取调用的输出上限 |
 | `checkpointMaxTokens` | `6000` | checkpoint 预算 |
-| `selectionThreshold` | `0.35` | 承载判定阈值（相对最大位移） |
-| `minKeep` | `8` | 最少保留候选数 |
-| `statusCommands` | `true` | 是否注册命令与回环诊断 |
-| `maxRecordedCompactions` | `32` | 每会话保留的账本条目 |
-| `logDecisions` | `true` | 是否记录编译决策 |
+| `selectionThreshold` | `0.35` | 承重判定阈值，相对于最大位移 |
+| `minKeep` | `8` | 至少保留几条 |
+| `statusCommands` | `true` | 注册命令和回环诊断 |
+| `maxRecordedCompactions` | `32` | 每个会话记多少次压缩账 |
+| `logDecisions` | `true` | 是否打编译日志 |
 
-仅当本插件自己就是 `compaction` provider（非桌面组合）时生效的键，与官方后端一致：`thresholdRatio`、`headroomTokens`、`retainTokens`、`retainRatio`、`maxTokens`、`summarizationProvider/Model`、`compactionRetries`、`maxOverflowRetries`、`modelPolicies`、`auto`。桌面端实际运行的是 preset 引擎自己的策略，`/context_status` 会报告解析后的真实值。
+`thresholdRatio`、`retainTokens`、`maxTokens` 这些跟官方后端一样的键，只在本插件自己就是 `compaction` 提供者（没有 preset 平面的组合）时生效。桌面端实际用的是 preset 引擎自己的策略，`/context_status` 会显示真实值。
 
-## 缓存账（细节）
+## 缓存账
 
-完整方法、逐事件表格与注意事项见 [docs/EVIDENCE.zh-CN.md](./docs/EVIDENCE.zh-CN.md)。下面是官方后端的实测摘要：
+具体方法和逐事件表格在 [证据文档](./docs/EVIDENCE.zh-CN.md) 里。这里只放结论：
 
 | 观察 | 数值 |
 | --- | --- |
-| 稳态缓存命中率（25 会话 / 3,515 请求 / 997M prompt token） | 99.20% |
-| 官方一次自动压缩的额外输入 | 约 72 万 token：约 55 万本可避免的摘要重读 + 约 17 万任何改写都要付的重读 |
-| 上述事件中的摘要调用 | ~55 万 prompt 里只命中 0–9,856 个 token，而 0.1–12.8 秒前那次请求命中 99%+ |
-| 长时间空闲后的手动 `/compact` | 摘要调用付了 331,799 未命中（缓存确实过期，躲不掉） |
-| 重放 vs 持久表层投影 | 完全一致（`live=399 replayed=399`）；分歧的是**线上请求**，不是日志 |
-| 工具结果剪枝（`tool-result-pruner`） | 释放 141,041 token，造成 1,675,192 token 重读（约 12×）——所以本压缩器不做剪枝（桌面端 preset 仍挂着出厂剪枝器，不归本插件控制） |
+| 稳态缓存命中率（25 个会话 / 3,515 次请求） | 99.20% |
+| 官方自动压缩一次 | 额外输入约 72 万 token。其中约 55 万是重读历史，约 17 万是压完之后必然的那次重读 |
+| 上述事件里的摘要调用 | 55 万 prompt 里只命中 0 到 9,856 个 token，而 0.1 到 12.8 秒前那次请求命中 99%+ |
+| 空闲很久之后手动 `/compact` | 摘要调用 331,799 token 全未命中，缓存确实过期了，这个躲不掉 |
+| 工具结果剪枝 | 三剪枝轮次省下 141,041 token，导致后面多读 1,675,192 token，约 12 倍。所以本插件不做剪枝 |
 
-（"额外输入"把缓存读取按新读的 10% 计价，对齐 provider 公布的缓存折扣；`bench` 里可用 `--hit-ratio` 改。）
-
-实现遵守的硬规则：一个 epoch 只发布一次；绝不中途改写历史；宁可深切割不要频繁浅切割；由窗口压力而非轮数驱动；绝不故意对冷前缀做摘要；把摘要调用变成可选。
-
-## 已知限制
-
-- 桌面端的阈值与保留尾部策略来自 preset 自带的官方引擎；手动 `/compact` 比自动压缩切得更深（官方引擎给它的保留量是 0）。
-- 抽取若拿不出可核验的引文，checkpoint 退化为确定性结构渲染；若连缩小源都做不到，则走官方摘要。所以质量受抽取器引用纪律约束，证书证明的是结构自洽，不是信息论完备。
-- 抽取调用目前**无法复用线上请求前缀**：实测重放只命中 system/tools 头部，因此 `extract` 模式与官方成本持平；`deterministic` 模式完全避开这次调用。让重放与线上请求逐字节一致是路线图项（`docs/DESIGN.zh-CN.md` §7）。
-- 钩子针对一个具体的官方 seam。它 fail-open，但未来 Harness 若重命名/挪走 `summarize`，行为会静默退回官方摘要——升级后用 `hook.backendUsesHookedSummarize` 确认。
-- 桌面端 preset 的隔离子组里仍挂着出厂的 tool-result-pruner。真实会话实测它是净缓存亏损（三轮 ≈1.1M miss-equivalent）。要关掉它需要覆盖 preset 声明（即 `docs/DESIGN.zh-CN.md` §3 否决的方案二）；本 bundle 有意不做这件事。
-
-## 开发
+自己跑一遍看本机数字：
 
 ```bash
-npm run check   # 语法
-npm test        # 离线：结构内核 + 流水线 + 基准工具（80 条断言，不需要 Harness）
+node bench/report.mjs
+```
+
+## 已知问题
+
+- 桌面端的阈值和保留量来自 preset 自带的官方引擎。手动 `/compact` 比自动压缩切得深（官方给手动的保留量是 0）。
+- 抽取如果拿不出可核验的引文，会退化成确定性渲染；确定性渲染如果连"比原文小"都做不到，就走官方摘要。所以质量受模型引用纪律的约束。证书证明的是结构自洽，不是信息论意义上的"信息没丢"。
+- 抽取调用目前吃不到线上请求的缓存，所以 `extract` 跟官方成本持平。`deterministic` 绕开这次调用。真要让它便宜，得让重放跟线上请求逐字节一致，这需要日志里没有的请求期信息，列在路线图里，现在做不到。
+- 钩子针对一个具体的官方方法。方法被改名或挪走的话，插件会静默退回官方摘要，不会弄坏会话——升级后用 `hook.backendUsesHookedSummarize` 确认一下。
+- 桌面端 preset 里还挂着官方的工具结果剪枝器，实测是亏的，但这个插件不管它。要关得覆盖 preset 声明，那个方案在 `docs/DESIGN.zh-CN.md` 里写了为什么没做。
+
+## 开发和测试
+
+```bash
+npm run check   # 语法检查
+npm test        # 80 条离线断言，不需要装 Harness
+node bench/report.mjs   # 用本机会话日志算缓存账
 ```
 
 目录：
 
 ```
-lib/index.js            宿主半边：引擎钩子、命令、缓存记账、诊断
-lib/pipeline.js         抽取 → 结构 → 渲染流水线（纯函数，可离线测试）
-lib/structure/core.js   刚度装配 / KKT 求解 / 静力凝聚 / 证书
-bench/                  可复现的缓存/压缩成本测量（读取会话日志）
-test/                   离线测试套件
-docs/DESIGN.zh-CN.md    设计说明：结构模型、缓存约束、钩子取舍
-docs/EVIDENCE.zh-CN.md  实测证据：基线、压缩解剖、剪枝成本、契约测试
+lib/index.js            宿主侧：引擎钩子、命令、缓存记账、诊断
+lib/pipeline.js         抽取 → 结构 → 渲染
+lib/structure/core.js   刚度装配、KKT、静力凝聚、证书
+bench/                  读会话日志算账
+test/                   离线测试
+docs/DESIGN.zh-CN.md    设计说明
+docs/EVIDENCE.zh-CN.md  实测证据
 ```
 
-PR 必须保持的不变量见 [CONTRIBUTING.zh-CN.md](./CONTRIBUTING.zh-CN.md)。
+PR 需要保持的约束写在 [CONTRIBUTING.zh-CN.md](./CONTRIBUTING.zh-CN.md) 里。
 
-## 安全与隐私
+## 隐私
 
-无埋点、不自行联网、不写磁盘状态。回环诊断无鉴权但不含会话内容；`statusCommands: false` 可关闭。详见 [SECURITY.zh-CN.md](./SECURITY.zh-CN.md)。
+插件没有埋点，不自己联网，不写磁盘状态。回环上的两个诊断端点是给本地排查用的，不含对话内容；不想要就在配置里关掉 `statusCommands`。细节在 [SECURITY.zh-CN.md](./SECURITY.zh-CN.md)。
 
 ## 许可证
 
