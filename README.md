@@ -50,6 +50,27 @@ Text inside the quotes is verbatim from the source. An item whose quote cannot b
 
 ## How it works
 
+```mermaid
+flowchart TD
+    A["Span to compact<br/>system prompt / tools / messages"] --> B["Replay with extraction instruction"]
+    B --> C["Model returns JSON<br/>kind / text / quote"]
+    C --> D{"Verify each quote"}
+    D -->|"found in source"| E["Keep"]
+    D -->|"missing or invented"| F["Discard"]
+    E --> G["Build structure<br/>item = DOF<br/>shared source / adjacency / same kind = stiffness<br/>current request = load<br/>anchors / open loops = supports"]
+    G --> H["KKT solve<br/>static condensation"]
+    H --> I{"Certificate<br/>supports intact<br/>selection consistent<br/>condensation reconstructs"}
+    I -->|"pass"| J["Deterministic render<br/>within checkpoint budget"]
+    I -->|"fail"| K["Deterministic render<br/>no model call"]
+    B -.->|"call failed / unparseable output"| K
+    J --> L["Publish checkpoint<br/>transaction owned by the shipped engine"]
+    K -->|"source shrinks"| L
+    K -->|"cannot shrink"| M["Fall back to the shipped summarizer"]
+    M --> L
+```
+
+The numbered steps:
+
 1. Replay the history being compacted, together with the system prompt and tool list, to the model, and append an instruction that requests JSON: each item carries a kind, a short summary, and a quote that must appear verbatim in the source.
 2. Verify every quote locally. Items that cannot be located, or that were invented, are discarded.
 3. Treat the surviving items as degrees of freedom. Shared source, adjacency and same-kind establish stiffness; the current request acts as the load; exact anchors and open loops are pinned as supports.
