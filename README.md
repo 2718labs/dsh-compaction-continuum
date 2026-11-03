@@ -21,8 +21,6 @@ Results:
 - Each automatic compaction by the shipped backend reads approximately 550,000 additional tokens of history and is billed at uncached input rates.
 - That additional read is not caused by cache expiry. The request preceding each of the three measured compactions hit 99.93%, 99.85% and 99.07% of its prompt, 12.8 s, 0.1 s and 1.1 s earlier respectively. The summarization request itself matched only the first 0 to 9,856 cached tokens.
 
-At a rough conversion for mixed Chinese/English text, 550,000 tokens corresponds to 350,000 to 450,000 characters.
-
 The plugin therefore provides two modes:
 
 - `deterministic`: no model call during compaction, structural selection only. On the three measured compactions the additional input drops to approximately 170,000 tokens (about 0.25×).
