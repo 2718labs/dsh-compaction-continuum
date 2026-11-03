@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- README's cost section and the measurement report summary are now tables instead of bullet lists, and state explicitly that the cache behavior is a constraint of replay-based summarization rather than a defect of the shipped backend. The shipped backend's transaction, lock, overflow recovery, retained tail and replay are noted as preserved unchanged.
 - README now includes a Mermaid flowchart of the compression pipeline, including both failure branches (unparseable extraction and failed certificate).
 - README and evidence documents rewritten in a neutral, report-style voice (organization as author, no first-person narration), with explicit definitions for every cost unit. The Chinese and English versions were both rewritten, and the example checkpoint now uses the renderer's real section names.
 - `docs/EVIDENCE.md` and `docs/EVIDENCE.zh-CN.md` restructured as measurement reports: objective, data and method, baseline, measured cost, attribution, mode comparison, quality constraints, uncertainty, reproduction.

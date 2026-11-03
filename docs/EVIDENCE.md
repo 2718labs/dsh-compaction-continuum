@@ -4,9 +4,16 @@ This report records 2718Labs' measurements of context-compaction cost in DeepSee
 
 ## Summary
 
-- Sample: 25 sessions, 3,515 requests, 997,002,631 prompt tokens; steady-state prefix-cache hit rate 99.20%.
-- Each automatic compaction by the shipped backend reads approximately 720,000 additional input tokens: about 550,000 from the summarizer's re-read of history and about 170,000 from the re-read that follows any rewrite.
-- The re-read is not caused by cache expiry. The request preceding each of the three measured compactions hit 99.93%, 99.85% and 99.07% of its prompt, 12.8 s, 0.1 s and 1.1 s earlier respectively; the summarizer request itself matched only 0 to 9,856 tokens.
+| Observation | Measured value |
+| --- | --- |
+| Sample | 25 sessions, 3,515 requests, 997,002,631 prompt tokens |
+| Steady-state prefix-cache hit rate | 99.20% |
+| Additional input per shipped automatic compaction | approximately 720,000 tokens (about 550,000 for the summarizer call, about 170,000 for the publication re-read) |
+| Cache state of the request preceding each compaction | 99.93% / 99.85% / 99.07% hit, 12.8 s / 0.1 s / 1.1 s earlier |
+| Cache hit of the summarizer request | 0 to 9,856 tokens |
+
+This cache behavior follows from a difference between the replayed request and the request actually sent: content assembled at request time is not in the session log, so a replay cannot reproduce it. The constraint applies to any replay-based summarizer and is not a functional defect of the shipped backend.
+
 - This plugin's `deterministic` mode performs no model call and skips the approximately 550,000-token re-read; `extract` mode performs one model call at approximately the same cost as the shipped backend.
 - The three compactions together account for 5.3% of that session's input cost. With `deterministic` mode the figure would be 1.2%.
 - Tool-result pruning in the same session freed 141,041 tokens and forced 1,675,192 additional tokens of reading.
@@ -70,7 +77,7 @@ The cache was valid. The summarizer request matched 0 to 9,856 tokens, which pla
 
 Additional check: at compaction time the replayed durable-surface projection matches the runtime projection (self-test output `live=399 replayed=399 identical=true`). The divergence is therefore not in how the durable log is reconstructed; it is in the **live request**. The request actually sent contains request-time material that was never written to the log, and a replay cannot reproduce it.
 
-Conclusion: for any replay-based summarization, the summarizer call cannot reuse the pre-compaction cache and costs approximately one full prompt read. This applies to the shipped backend and to this plugin's `extract` mode alike.
+Conclusion: for any replay-based summarization, the summarizer call cannot reuse the pre-compaction cache and costs approximately one full prompt read. The constraint applies to the shipped backend and to this plugin's `extract` mode alike, and is not a functional defect of the shipped backend. The shipped backend's remaining flow — transaction, lock, overflow recovery, retained tail and replay — is preserved unchanged by this plugin.
 
 ## 6. Mode comparison
 

@@ -13,13 +13,17 @@ The compaction backend shipped with Harness asks a model to read the history and
 
 ## Measured compaction cost
 
-The measurement was carried out to determine the actual cost structure of compaction. Data source: 25 session logs from a single machine, 3,515 requests, 997,002,631 prompt tokens. Method, definitions and reproduction steps are in [the measurement report](./docs/EVIDENCE.md).
+The measurement was carried out to determine the cost structure of compaction. Data source: 25 session logs from a single machine, 3,515 requests, 997,002,631 prompt tokens. Method, definitions and reproduction steps are in [the measurement report](./docs/EVIDENCE.md).
 
-Results:
+| Observation | Measured value |
+| --- | --- |
+| Steady-state prefix-cache hit rate | 99.20% (25 sessions, 3,515 requests) |
+| Summarizer input per shipped automatic compaction | approximately 550,000 tokens, billed as uncached input |
+| Publication re-read per shipped automatic compaction | approximately 170,000 tokens |
+| Cache state of the request preceding each compaction | 99.93% / 99.85% / 99.07% hit, 12.8 s / 0.1 s / 1.1 s earlier |
+| Cache hit of the summarizer request | 0 to 9,856 tokens |
 
-- The steady-state prefix-cache hit rate is 99.20%. Input cost in long sessions is carried mostly by the cache.
-- Each automatic compaction by the shipped backend reads approximately 550,000 additional tokens of history and is billed at uncached input rates.
-- That additional read is not caused by cache expiry. The request preceding each of the three measured compactions hit 99.93%, 99.85% and 99.07% of its prompt, 12.8 s, 0.1 s and 1.1 s earlier respectively. The summarization request itself matched only the first 0 to 9,856 cached tokens.
+This cache behavior follows from a difference between the replayed request and the request actually sent: content assembled at request time is not in the session log, so a replay cannot reproduce it. The same constraint applies to any replay-based summarizer; it is not a functional defect of the shipped backend. The shipped backend's transaction, lock, overflow recovery, retained tail and replay logic are all preserved unchanged by this plugin.
 
 The plugin therefore provides two modes:
 
