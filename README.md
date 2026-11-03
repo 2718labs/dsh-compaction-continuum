@@ -2,7 +2,7 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-v0.4.0-A44742)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.5.0-A44742)](./CHANGELOG.md)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.2.1--rc.5-1F6B5B)](https://github.com/deepseek-ai)
 [![License](https://img.shields.io/badge/license-MIT-263238)](./LICENSE)
 [![CI](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml/badge.svg)](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml)
@@ -29,6 +29,8 @@ Precondition: the self-test reports `backendUsesHookedSummarize: true`, meaning 
 | Fallbacks | none |
 
 On the same span, the shipped backend had previously published a 20,011-character summary (approximately 5,131 tokens). The plugin produced 2,243 characters, every item traceable to a verbatim source quote.
+
+These figures were measured on v0.3.0, before verbatim retention became the default. From v0.5.0 the published checkpoint also carries the retention block (see [Verbatim retention](#verbatim-retention-near-lossless-layer)), so its size is larger than the checkpoint figure above; the extraction and structural measurements are unchanged.
 
 Method and limitations:
 
@@ -89,8 +91,8 @@ flowchart TD
     E --> G["Build structure<br/>item = DOF<br/>shared source / adjacency / same kind = stiffness<br/>current request = load<br/>anchors / open loops = supports"]
     G --> H["KKT solve<br/>static condensation"]
     H --> I{"Certificate<br/>supports intact<br/>selection consistent<br/>condensation reconstructs"}
-    I -->|"pass"| J["Deterministic render<br/>within checkpoint budget"]
-    I -->|"fail"| K["Deterministic render<br/>no model call"]
+    I -->|"pass"| J["Deterministic render + verbatim retention<br/>structural index + user requests / recent units"]
+    I -->|"fail"| K["Deterministic render, no model call<br/>structural index + verbatim retention"]
     B -.->|"call failed / unparseable output"| K
     J --> L["Publish checkpoint<br/>transaction owned by the shipped engine"]
     K -->|"source shrinks"| L
@@ -106,6 +108,7 @@ The numbered steps:
 4. Solve the KKT system and perform static condensation to obtain the load-bearing set.
 5. Produce a certificate: whether supports were eliminated, whether the selection is self-consistent, and whether the condensation reconstructs the full response. Any failed check prevents publication.
 6. Render the result within the checkpoint budget; the `## Next Step` section is always anchored (an extracted next-step atom, or a verbatim floor naming the latest request).
+7. Append the verbatim retention block: real user requests and recent units copied from the source, up to `verbatimTokens`, and clamped so the checkpoint still shrinks its source.
 
 Failures degrade step by step: a failed structural compile falls back to local rendering with no model call; a failed local render falls back to the shipped summarizer. A session is never left without a checkpoint.
 
@@ -118,6 +121,17 @@ A compaction must leave the successor able to continue the task, not only a smal
 - The certificate records `nextStepAnchored`; a checkpoint without a continuation anchor would be refused rather than published.
 
 The floor is a quote, not a model invention: the successor can read the exact latest instruction. Two limits remain. First, the guarantee is structural, not information-theoretic: it proves that a continuation anchor is present and that supports survived, not that every fact of the task survived; repeated generations may still drop detail that no atom cites. Second, retention of recent messages belongs to the shipped engine: automatic compaction keeps a retained tail verbatim, while `/compact` cuts the whole visible surface down to the checkpoint. For long autonomous runs, rely on automatic compaction when continuity of detail matters; treat `/compact` as a deep reset.
+
+### Verbatim retention (near-lossless layer)
+
+A structural checkpoint is an index, not a transcript: it says what is load-bearing, but it cannot give back the exact wording of the user's requests. OpenAI Codex's compaction gets much of its continuation fidelity from keeping real user messages verbatim, up to 20,000 tokens, next to a model-written handoff summary ([compact prompt](https://github.com/openai/codex/blob/main/codex-rs/prompts/templates/compact/prompt.md), [replacement history](https://github.com/openai/codex/blob/main/codex-rs/core/src/compact.rs)). This plugin adds the same layer without giving up the index:
+
+- Real user requests are copied from the source, newest first, uncompressed. Only request-time scaffolding (snapshot blocks, a prior checkpoint) is stripped.
+- After the requests, the most recent non-user units (assistant messages, tool results) are copied verbatim with a per-unit cap, so the current working set stays inspectable.
+- `verbatimTokens` (default 20,000) is the combined budget. Truncation and omission are marked in the block, counted in the audit, and reported by the certificate field `userMessagesVerbatim`.
+- The block is clamped so the published checkpoint always remains smaller than the span it replaces.
+
+The cost is size: a near-lossless checkpoint is roughly the retention budget rather than a few thousand tokens, and the one-time publication re-read grows with it. Set `verbatimTokens: 0` for the earlier compression-first behaviour. Even with retention, assistant reasoning and tool output outside the retained set still survive only through atoms — the durable session log is the exact fallback, not the checkpoint.
 
 ## Attachment point
 
@@ -142,7 +156,7 @@ Requires the desktop Harness with `BasicCompactionEngine` reachable in the compo
 Install the GitHub bundle with the plugin manager:
 
 ```
-target: github:2718labs/dsh-compaction-continuum#v0.4.0
+target: github:2718labs/dsh-compaction-continuum#v0.5.0
 ```
 
 For a manual installation, add the dependency and the bundle to `~/.dsh/profiles/<profile>/package.json`. The bundle must be listed after `@deepseek-ai/dsh-web-app`:
@@ -150,7 +164,7 @@ For a manual installation, add the dependency and the bundle to `~/.dsh/profiles
 ```json
 {
   "dependencies": {
-    "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.4.0"
+    "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.5.0"
   },
   "dsh": { "profile": { "bundles": ["...", "dsh-compaction-continuum"] } }
 }
@@ -188,7 +202,7 @@ Sample `/context_status` output:
 hook               : installed on @deepseek-ai/dsh-compaction-basic; active engine shipped BasicCompactionEngine (preset plane, hooked)
 trigger threshold  : 727040 tokens (ratio 0.8)
 current context    : 273740 tokens (26.1% of window, 453300 below trigger)
-last audit         : compiled mode=extract units=318 candidates=41 kept=27 checkpoint≈5837 tokens nextStep=atom certificate={...}
+last audit         : compiled mode=extract units=318 candidates=41 kept=27 checkpoint≈5837 tokens nextStep=atom retained=12u/8r (19880 tokens) certificate={...}
 extractor call     : 312480 cached / 640 uncached input tokens
 cache accounting   : 123 requests, hit 99.24% (384347520 cached / 2935624 uncached)
 ```
@@ -201,7 +215,8 @@ The plugin row configures the compressor only. Compaction thresholds and retenti
 | --- | --- | --- |
 | `mode` | `extract` | `extract` performs one model call; `deterministic` stays fully local; `off` returns control to the shipped summarizer |
 | `extractorMaxTokens` | `12000` | Output cap for the extraction call |
-| `checkpointMaxTokens` | `6000` | Checkpoint budget |
+| `checkpointMaxTokens` | `6000` | Structural-checkpoint budget |
+| `verbatimTokens` | `20000` | Verbatim-retention budget for user requests and recent units; `0` disables the near-lossless layer |
 | `selectionThreshold` | `0.35` | Load-bearing cutoff relative to the maximum displacement |
 | `minKeep` | `8` | Minimum number of items retained |
 | `statusCommands` | `true` | Whether to register the commands and loopback diagnostics |
@@ -240,7 +255,7 @@ node bench/report.mjs
 
 ```bash
 npm run check   # syntax
-npm test        # 95 offline assertions, no Harness installation required
+npm test        # 110 offline assertions, no Harness installation required
 node bench/report.mjs   # cache accounting over this machine's session logs
 ```
 

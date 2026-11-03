@@ -289,7 +289,13 @@ for (let generation = 1; generation <= 3; generation += 1) {
   );
   const step = section(result.text, "Next Step");
   checkTrue(`generation ${generation} keeps the next step`, step.includes(`继续第 ${generation} 阶段`), JSON.stringify(step));
+  checkTrue(`generation ${generation} keeps the request verbatim`, result.text.includes(request), JSON.stringify(result.audit.retention));
   checkTrue(`generation ${generation} certificates the continuation`, result.audit.certificate.nextStepAnchored === true);
+  checkTrue(
+    `generation ${generation} certificates verbatim user requests`,
+    result.audit.certificate.userMessagesVerbatim === true,
+    JSON.stringify(result.audit.certificate),
+  );
   generationMessages = [
     { role: "system", content: messages[0].content },
     {
@@ -301,6 +307,53 @@ for (let generation = 1; generation <= 3; generation += 1) {
     },
   ];
 }
+
+// --- verbatim retention: the user's own words survive compression -----------
+const retentionResult = await compileCheckpoint(
+  { messages },
+  { mode: "extract", checkpointMaxTokens: 400, verbatimTokens: 4000, queryText: "继续改 router.ts", callModel: async () => extraction },
+);
+const firstAsk = messages[1].content[0].text;
+const laterAsk = messages[5].content[0].text;
+checkTrue("retention keeps the first user request verbatim", retentionResult.text.includes(firstAsk), JSON.stringify(retentionResult.audit.retention));
+checkTrue("retention keeps later user requests verbatim", retentionResult.text.includes(laterAsk));
+checkTrue("retention audit counts user messages", retentionResult.audit.retention.userMessages >= 2, JSON.stringify(retentionResult.audit.retention));
+checkTrue(
+  "certificate records verbatim user messages",
+  retentionResult.audit.certificate.userMessagesVerbatim === true,
+  JSON.stringify(retentionResult.audit.certificate),
+);
+checkTrue(
+  "retention keeps the checkpoint smaller than its source",
+  retentionResult.audit.checkpointTokens < retentionResult.audit.sourceTokens,
+  JSON.stringify(retentionResult.audit.retention),
+);
+
+const noRetention = await compileCheckpoint(
+  { messages },
+  { mode: "deterministic", checkpointMaxTokens: 1200, verbatimTokens: 0, queryText: "继续" },
+);
+checkTrue(
+  "verbatim retention can be disabled",
+  noRetention.audit.retention.enabled === false && !noRetention.text.includes("Retained User Requests (verbatim)"),
+);
+checkTrue("disabled retention certificates null", noRetention.audit.certificate.userMessagesVerbatim === null);
+
+// A budget too small for the newest request must be reported, not hidden.
+const tightRetention = await compileCheckpoint(
+  { messages },
+  { mode: "deterministic", checkpointMaxTokens: 200, verbatimTokens: 65, queryText: "继续" },
+);
+checkTrue(
+  "tight retention stays within its budget",
+  tightRetention.audit.retention.enabled === true && tightRetention.audit.retention.tokens <= 65,
+  JSON.stringify(tightRetention.audit.retention),
+);
+checkTrue(
+  "budget-limited retention is not certified as verbatim",
+  tightRetention.audit.certificate.userMessagesVerbatim === false,
+  JSON.stringify(tightRetention.audit.certificate),
+);
 
 console.log(failures === 0 ? "\nALL PIPELINE CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exitCode = failures === 0 ? 0 : 1;

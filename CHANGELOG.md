@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-11-04
+
+### Added
+
+- Verbatim retention layer (near-lossless continuity, Codex-class): real user requests are copied from the source newest-first and uncompressed, then the most recent non-user units (assistant messages, tool results) with a per-unit cap, all under a combined `verbatimTokens` budget (default 20,000). Truncation and omission are marked in the block, counted in the audit `retention` record, and reported by the certificate field `userMessagesVerbatim`.
+- The retention block is clamped so the published checkpoint always remains smaller than the span it replaces; `0` restores the previous compression-first behaviour.
+- `verbatimTokens` config key, and operator reporting in `/context_status`, `/context_inspect` and `/compaction-continuum/ping`.
+- Long-task regression tests now assert that each generation keeps the user request verbatim as well as the next step. Offline suite is now 110 assertions.
+
+### Changed
+
+- Default published checkpoint size grows: the structural index (≤ `checkpointMaxTokens`) plus the verbatim retention block (≤ `verbatimTokens`). The one-time publication re-read grows with it, still far below the replay cost of a compaction. README documents the trade-off and the reference retention design in OpenAI Codex.
+
 ## [0.4.0] - 2026-11-04
 
 ### Added
@@ -67,7 +80,8 @@ First public release: **结构性压缩 / Structural Compression**.
 
 - Initial structural compressor: extraction pipeline, stiffness/KKT/condensation core, certificates, deterministic render, offline tests.
 
-[Unreleased]: https://github.com/2718labs/dsh-compaction-continuum/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/2718labs/dsh-compaction-continuum/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/2718labs/dsh-compaction-continuum/releases/tag/v0.5.0
 [0.4.0]: https://github.com/2718labs/dsh-compaction-continuum/releases/tag/v0.4.0
 [0.3.0]: https://github.com/2718labs/dsh-compaction-continuum/releases/tag/v0.3.0
 [0.2.1]: https://github.com/2718labs/dsh-compaction-continuum/compare/v0.2.0...v0.2.1

@@ -33,6 +33,8 @@ The figures below were measured after installing this plugin; the object of meas
 | Fallbacks | none |
 | Shipped summary for the same span (reference) | 20,011 characters, approximately 5,131 tokens |
 
+These figures were measured on v0.3.0, before verbatim retention became the default. From v0.5.0 the published checkpoint also carries the retention block (real user requests and recent units up to `verbatimTokens`), so published size is larger by that block; the extraction and structural figures above are unchanged.
+
 Method and limitations:
 
 - This is a replay measurement: the most recent recorded compaction span in the session is rebuilt and passed through one `summarize` call, reporting actual usage and output without publishing anything. Publication cost — the re-read of the new prefix by the first request after a real compaction — is therefore not included.
@@ -120,12 +122,13 @@ Beyond cost, the plugin imposes testable constraints on what is published:
 | Detectability of a dropped critical constraint | none | constraints and anchors are pinned as supports; publication is refused if one is lost (tested) |
 | Traceability of content | none | every item must quote the source verbatim; unlocatable items are discarded |
 | Continuation anchor for the successor | a model-written "Next Step" section, no structural guarantee | an extracted `next_step` atom pinned as a support, else a verbatim floor naming the latest request; recorded as `nextStepAnchored` (tested across three successive generations) |
+| Verbatim continuation of user intent | none; all content is model-written | real user requests are copied from the source under a budget; the certificate records `userMessagesVerbatim` |
 | Behaviour on compaction failure | throws; a session may end up without a checkpoint | three-level fallback: structural → local render → shipped summarizer |
 | Render determinism | model-dependent | byte-identical for identical input |
 
-Measured shipped summaries are 1,728 to 5,131 tokens long. This plugin's checkpoint is bounded by `checkpointMaxTokens` (default 6,000) and contains only verifiable material.
+Measured shipped summaries are 1,728 to 5,131 tokens long. This plugin's structural checkpoint is bounded by `checkpointMaxTokens` (default 6,000) and contains only verifiable material; the published checkpoint additionally carries a verbatim retention block bounded by `verbatimTokens` (default 20,000) and clamped to keep the checkpoint smaller than its source.
 
-The offline suite contains 95 assertions covering: rejection of invented and paraphrased quotes, rejection of lost supports, reporting of ungrounded structures, rejection of checkpoints that cannot shrink the source, degradation on extractor failure, absence of model calls in `deterministic` mode, byte-identical rendering, and continuation anchoring across three successive compaction generations.
+The offline suite contains 110 assertions covering: rejection of invented and paraphrased quotes, rejection of lost supports, reporting of ungrounded structures, rejection of checkpoints that cannot shrink the source, degradation on extractor failure, absence of model calls in `deterministic` mode, byte-identical rendering, continuation anchoring across three successive compaction generations, and verbatim retention of the user requests across those generations.
 
 ## 8. Additional observations
 
@@ -157,7 +160,7 @@ In this case the cache had genuinely expired (about 49 minutes since the precedi
 ## 10. Reproduction
 
 ```bash
-npm test                                   # 95 offline assertions, no Harness installation required
+npm test                                   # 110 offline assertions, no Harness installation required
 node bench/report.mjs                      # account this machine's sessions
 node bench/report.mjs <dir> --format md    # render tables in the same format as this report
 node bench/report.mjs --format json        # raw data

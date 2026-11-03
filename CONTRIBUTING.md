@@ -7,7 +7,7 @@ This document describes how to contribute to the project. The plugin is small an
 Requirements: Node.js >= 20 (no package installation needed — the plugin and its tests have no runtime or dev dependencies).
 
 ```bash
-npm test    # offline: structural core + pipeline + benchmark harness, 95 assertions
+npm test    # offline: structural core + pipeline + benchmark harness, 110 assertions
 npm run check
 node bench/report.mjs   # accounting over this machine's recorded sessions (or pass a directory)
 ```

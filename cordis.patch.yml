@@ -39,6 +39,7 @@
         mode: extract
         extractorMaxTokens: 12000
         checkpointMaxTokens: 6000
+        verbatimTokens: 20000
         selectionThreshold: 0.35
         minKeep: 8
         statusCommands: true

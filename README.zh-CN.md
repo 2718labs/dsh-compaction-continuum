@@ -2,7 +2,7 @@
 
 [English](./README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-v0.4.0-A44742)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.5.0-A44742)](./CHANGELOG.md)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.2.1--rc.5-1F6B5B)](https://github.com/deepseek-ai)
 [![License](https://img.shields.io/badge/license-MIT-263238)](./LICENSE)
 [![CI](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml/badge.svg)](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml)
@@ -29,6 +29,8 @@ Harness 自带的压缩由模型阅读历史并生成摘要，再把摘要写回
 | 降级或回退 | 无 |
 
 同一跨度上，官方后端此前发布的摘要为 20,011 字符（约 5,131 token）。本插件输出 2,243 字符，且每一条都能回溯至原文引用。
+
+该表测量于 v0.3.0，当时逐字保留尚未默认启用。v0.5.0 起 checkpoint 还会附带逐字保留块（见[逐字保留](#逐字保留近无损层)），因此发布体积大于表中的 checkpoint 数值；抽取与结构测量不受影响。
 
 测量方式与限制：
 
@@ -89,8 +91,8 @@ flowchart TD
     E --> G["建立结构<br/>条目 = 自由度<br/>同源 / 相邻 / 同类 = 刚度<br/>当前请求 = 载荷<br/>锚点 / 未关闭事项 = 支座"]
     G --> H["KKT 求解<br/>静力凝聚"]
     H --> I{"证书校验<br/>支座未消去<br/>选择自洽<br/>凝聚可重构"}
-    I -->|"通过"| J["确定性渲染<br/>按预算输出 checkpoint"]
-    I -->|"不通过"| K["确定性渲染<br/>不调用模型"]
+    I -->|"通过"| J["确定性渲染 + 逐字保留<br/>结构索引 + 用户请求 / 最近单元"]
+    I -->|"不通过"| K["确定性渲染（不调用模型）<br/>结构索引 + 逐字保留"]
     B -.->|"调用失败 / 输出不可解析"| K
     J --> L["发布 checkpoint<br/>事务由官方引擎完成"]
     K -->|"可以缩小源"| L
@@ -106,6 +108,7 @@ flowchart TD
 4. 求解 KKT 方程并执行静力凝聚，选出承重集合。
 5. 生成证书：支座是否被消去、选择是否自洽、凝聚结果能否重构完整响应。任一校验失败则不发布。
 6. 按预算渲染为 checkpoint；`## Next Step` 始终有锚点（抽取出的 next_step 条目，或逐字引用最近请求的确定性兜底）。
+7. 追加逐字保留块：真实用户请求与最近单元从原文复制，总预算 `verbatimTokens`，并保证 checkpoint 仍小于被替换的区间。
 
 任一步骤失败时逐级降级：结构编译失败则改为纯本地渲染（不调用模型）；本地渲染失败则交还官方摘要。会话不会因压缩失败而缺少 checkpoint。
 
@@ -118,6 +121,17 @@ flowchart TD
 - 证书记录 `nextStepAnchored`；没有续接锚点的 checkpoint 会被拒绝发布。
 
 兜底是逐字引用，不是模型编造，后继能看到最近一条指令的原文。仍有两个边界。其一，这是结构保证而非信息论保证：它证明续接锚点存在、支座未被消去，不证明任务中的每个事实都保留；多代压缩仍可能丢掉没有任何条目引用的细节。其二，近期消息的保留由官方引擎决定：自动压缩会逐字保留一段尾部，`/compact` 则把整个可见面压成 checkpoint。长任务若依赖细节连续，应依赖自动压缩；`/compact` 应视为一次深度重置。
+
+### 逐字保留（近无损层）
+
+结构 checkpoint 是索引，不是转写稿：它能说明什么承重，却无法还原用户请求的确切措辞。OpenAI Codex 的压缩之所以续接稳定，很大一部分来自把真实用户消息逐字保留（最多 20,000 token），再配一份模型手写交接摘要（[压缩提示词](https://github.com/openai/codex/blob/main/codex-rs/prompts/templates/compact/prompt.md)、[替换历史](https://github.com/openai/codex/blob/main/codex-rs/core/src/compact.rs)）。本插件在不放弃索引的前提下加入同一层：
+
+- 真实用户请求从原文复制，新的在前，不压缩。只剥离请求期脚手架（运行时快照、此前的 checkpoint）。
+- 用户请求之后，复制最近的非用户单元（助手消息、工具结果），单个单元有上限，使当前工作集保持可检视。
+- `verbatimTokens`（默认 20,000）为两阶段合计预算。截断与省略会在块内标记、计入审计，并由证书字段 `userMessagesVerbatim` 报告。
+- 该块会被夹紧，保证发布的 checkpoint 始终小于被替换的区间。
+
+代价是体积：近无损 checkpoint 大致等于保留预算，而不是几千 token；一次性发布重读随之增长。设 `verbatimTokens: 0` 回到早期以压缩率优先的行为。即便启用保留，保留集之外的助手推理与工具输出仍只通过条目存活——精确回退是持久会话日志，而不是 checkpoint 本身。
 
 ## 挂载方式
 
@@ -142,7 +156,7 @@ flowchart TD
 使用插件管理器安装 GitHub bundle：
 
 ```
-target: github:2718labs/dsh-compaction-continuum#v0.4.0
+target: github:2718labs/dsh-compaction-continuum#v0.5.0
 ```
 
 手动安装时，在 `~/.dsh/profiles/<profile>/package.json` 中添加依赖与 bundle。bundle 必须排在 `@deepseek-ai/dsh-web-app` 之后：
@@ -150,7 +164,7 @@ target: github:2718labs/dsh-compaction-continuum#v0.4.0
 ```json
 {
   "dependencies": {
-    "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.4.0"
+    "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.5.0"
   },
   "dsh": { "profile": { "bundles": ["...", "dsh-compaction-continuum"] } }
 }
@@ -187,7 +201,7 @@ Invoke-RestMethod 'http://127.0.0.1:<端口>/compaction-continuum/selftest?test=
 hook               : installed on @deepseek-ai/dsh-compaction-basic; active engine shipped BasicCompactionEngine (preset plane, hooked)
 trigger threshold  : 727040 tokens (ratio 0.8)
 current context    : 273740 tokens (26.1% of window, 453300 below trigger)
-last audit         : compiled mode=extract units=318 candidates=41 kept=27 checkpoint≈5837 tokens nextStep=atom certificate={...}
+last audit         : compiled mode=extract units=318 candidates=41 kept=27 checkpoint≈5837 tokens nextStep=atom retained=12u/8r (19880 tokens) certificate={...}
 extractor call     : 312480 cached / 640 uncached input tokens
 cache accounting   : 123 requests, hit 99.24% (384347520 cached / 2935624 uncached)
 ```
@@ -200,7 +214,8 @@ cache accounting   : 123 requests, hit 99.24% (384347520 cached / 2935624 uncach
 | --- | --- | --- |
 | `mode` | `extract` | `extract` 调用一次模型；`deterministic` 完全本地；`off` 交还官方摘要 |
 | `extractorMaxTokens` | `12000` | 抽取调用输出上限 |
-| `checkpointMaxTokens` | `6000` | checkpoint 预算 |
+| `checkpointMaxTokens` | `6000` | 结构 checkpoint 预算 |
+| `verbatimTokens` | `20000` | 用户请求与最近单元的逐字保留预算；`0` 关闭近无损层 |
 | `selectionThreshold` | `0.35` | 承重判定阈值，相对于最大位移 |
 | `minKeep` | `8` | 最少保留条目数 |
 | `statusCommands` | `true` | 是否注册命令与回环诊断端点 |
@@ -239,7 +254,7 @@ node bench/report.mjs
 
 ```bash
 npm run check   # 语法检查
-npm test        # 95 条离线断言，无需安装 Harness
+npm test        # 110 条离线断言，无需安装 Harness
 node bench/report.mjs   # 基于本机会话日志计算缓存账
 ```
 
