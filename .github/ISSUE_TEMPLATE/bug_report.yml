@@ -1,0 +1,69 @@
+name: Bug report
+description: Something is wrong with context compression, the status commands, or installation.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do **not** paste conversation content, prompts, or session logs.
+        The plugin's own diagnostics are content-free and are usually enough.
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DeepSeek Harness version
+      description: Settings → About, or the version in the app title / package metadata.
+      placeholder: "0.2.1-rc.5"
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: From `GET http://127.0.0.1:<port>/compaction-continuum/ping`.
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How is it installed?
+      options:
+        - plugin_manager install_bundle (GitHub spec)
+        - Manual profile dependencies + dsh.profile.bundles
+        - Local link (development)
+        - Other (describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: The visible behavior. A screenshot of the toast/command result is fine.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Content-free diagnostics
+      description: |
+        Paste the output of (replace the port with your `dsh web` URL port):
+        `Invoke-RestMethod http://127.0.0.1:48483/compaction-continuum/selftest | ConvertTo-Json -Depth 8`
+        Remove the `sessionId` / `agents` fields if you prefer; everything else is counts, policy and stacks.
+      render: json
+    validations:
+      required: false
+  - type: textarea
+    id: config
+    attributes:
+      label: Plugin config (optional)
+      description: The `compaction-continuum` row from your profile patch (redact anything private).
+      render: yaml
+    validations:
+      required: false

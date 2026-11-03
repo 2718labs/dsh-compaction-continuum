@@ -1,0 +1,46 @@
+# ============================================================================
+# dsh-compaction-continuum — bundle patch
+# ============================================================================
+# Layer order: @deepseek-ai/dsh-base → @deepseek-ai/dsh-web-app (disables the
+# shipped compaction-basic / command-compact / tool-result-pruner Host rows and
+# notes that "the compaction backend moves to the preset plane") → this bundle →
+# the profile's own cordis.patch.yml. This bundle therefore comes after the web
+# layer in dsh.profile.bundles.
+#
+# Every row restates `name`: a patch row replaces the whole row, so an id-only
+# row would drop the name and invalidate it.
+#
+# 1) Keep the shipped Host-plane backend off: this bundle mounts its own
+#    `compaction` provider below, and one composition allows one provider.
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  disabled: true
+
+# 2) Replace the shipped Host-plane /compact command with this plugin's own.
+#    On the desktop, presets still mount their own command-compact; that command
+#    now reaches the hooked backend, which is what we want.
+- id: command-compact
+  name: '@deepseek-ai/dsh-command-compact'
+  disabled: true
+
+# 3) Mount this bundle.
+#    - In a composition without a preset plane this row IS the compaction backend.
+#    - In the desktop app the preset plane owns an isolated shipped engine; this
+#      plugin replaces that engine's `summarize()` prototype method at load time,
+#      so the preset engine runs this compressor while keeping the shipped
+#      transaction, lock, overflow recovery, retained tail and replay.
+#    `mode` and the budgets below configure the compressor. `thresholdRatio` and
+#    `retainTokens` only apply when this row is the provider (no preset plane);
+#    on the desktop, policy comes from the preset's shipped engine.
+- insert:
+    - id: compaction-continuum
+      name: dsh-compaction-continuum
+      config:
+        mode: extract
+        extractorMaxTokens: 12000
+        checkpointMaxTokens: 6000
+        selectionThreshold: 0.35
+        minKeep: 8
+        statusCommands: true
+        thresholdRatio: 0.8
+        retainTokens: 20000

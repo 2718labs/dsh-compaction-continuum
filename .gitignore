@@ -1,0 +1,25 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local/editor artifacts
+coverage/
+dist/
+*.tsbuildinfo
+*.log
+
+# Harness profile artifacts (never commit a live profile's data)
+.dsh/
+sessions/
+*.zstd

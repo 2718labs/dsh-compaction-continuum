@@ -1,0 +1,55 @@
+{
+  "name": "dsh-compaction-continuum",
+  "version": "0.3.0",
+  "description": "Structural Compression (结构性压缩) for DeepSeek Harness context: one cited-atom extraction call, a structural-mechanics solve, and a deterministic checkpoint with reconstruction certificates.",
+  "private": false,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test/structure.test.mjs && node test/pipeline.test.mjs",
+    "check": "node --check lib/index.js && node --check lib/pipeline.js && node --check lib/structure/core.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "compaction",
+    "context-engineering",
+    "context-compression",
+    "structural-compression",
+    "static-condensation",
+    "cache-preserving"
+  ],
+  "author": "2718Labs",
+  "license": "MIT",
+  "homepage": "https://github.com/2718labs/dsh-compaction-continuum#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2718labs/dsh-compaction-continuum.git"
+  },
+  "bugs": {
+    "url": "https://github.com/2718labs/dsh-compaction-continuum/issues"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

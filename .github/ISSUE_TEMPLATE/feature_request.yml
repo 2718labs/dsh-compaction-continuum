@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose a change to the compressor, commands, policy, or documentation.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the concrete situation, not only the proposed API.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+  - type: textarea
+    id: cache-impact
+    attributes:
+      label: Cache / cost impact
+      description: |
+        This project treats the provider prefix cache as a hard constraint:
+        one publication per epoch, no mid-history rewrites, no per-turn summarization.
+        Explain how the proposal keeps that invariant, or why it should be relaxed.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

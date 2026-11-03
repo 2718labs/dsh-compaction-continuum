@@ -1,0 +1,191 @@
+/**
+ * Offline pipeline test: no Host, no provider. A fake `callModel` stands in for
+ * the one extraction call, so the structural solve, certification and rendering
+ * can be verified independently.
+ */
+import { compileCheckpoint, segmentMessages, validateAtoms } from "../lib/pipeline.js";
+
+let failures = 0;
+function checkTrue(name, value, detail = "") {
+  console.log(`${value ? "PASS" : "FAIL"}  ${name}${value ? "" : `  ${detail}`}`);
+  if (!value) failures += 1;
+}
+function checkLine(name, text, needle) {
+  checkTrue(`${name} contains ${JSON.stringify(needle)}`, text.includes(needle));
+}
+
+const messages = [
+  { role: "system", content: [{ type: "text", text: "You are a coding agent. Tools: read, edit, bash." }] },
+  {
+    role: "user",
+    content: [{ type: "text", text: "请把 G:/proj/src/router.ts 里的 route table 改成惰性注册，并且保留 /api/health。" }],
+  },
+  {
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text: "我先看 router.ts 的现状：它用了即时注册，受 tools/registry.ts 的 order 约束。决定：改成分阶段惰性注册，避免改动 /api/health。",
+      },
+      { type: "tool-call", name: "read", arguments: '{"path":"G:/proj/src/router.ts"}' },
+    ],
+  },
+  {
+    role: "tool",
+    content: [{ type: "text", text: "export const routes = [\n  { path: '/api/health', handler: health },\n  { path: '/api/user', handler: user },\n]" }],
+  },
+  {
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text: "已确认：router.ts 的 routes 是静态数组，/api/health 在第一位。下一步是把数组转成 registerLazy() 并保持顺序。错误码 E_ROUTE_DUP 出现在 registry.ts:88。",
+      },
+    ],
+  },
+  { role: "user", content: [{ type: "text", text: "改吧，注意别破坏缓存率。" }] },
+  { role: "assistant", content: [{ type: "text", text: "正在改 router.ts，等待结构测试结果。" }] },
+  {
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text: Array.from(
+          { length: 20 },
+          (_, index) => `步骤 ${index}: 检查 G:/proj/src/router.ts 的静态路由表，记录 /api/health 的顺序约束，确认 registry.ts 的注册时机。`,
+        ).join("\n"),
+      },
+    ],
+  },
+  { role: "user", content: [{ type: "text", text: "继续。" }] },
+];
+
+const { head, units } = segmentMessages(messages);
+checkTrue("system head is separated", head.length === 1);
+checkTrue("units segmented", units.length === 8, `got ${units.length}`);
+
+// --- quote validation is mechanical -----------------------------------------
+const good = validateAtoms(
+  {
+    atoms: [
+      { kind: "anchor", text: "router.ts 路径", quote: "G:/proj/src/router.ts" },
+      { kind: "anchor", text: "health 路由必须保留", quote: "/api/health" },
+      { kind: "decision", text: "改为惰性注册", quote: "改成分阶段惰性注册" },
+      { kind: "error_fix", text: "重复路由错误码", quote: "E_ROUTE_DUP" },
+    ],
+  },
+  units,
+);
+checkTrue("exact quotes are accepted", good.accepted === 4, JSON.stringify(good));
+const bad = validateAtoms(
+  { atoms: [{ kind: "anchor", text: "编造的路径", quote: "G:/proj/src/does-not-exist.ts" }] },
+  units,
+);
+checkTrue("a paraphrased or invented quote is rejected", bad.accepted === 0 && bad.rejected === 1);
+
+// --- extract mode -----------------------------------------------------------
+const extraction = JSON.stringify({
+  atoms: [
+    { kind: "goal", text: "把 router.ts 的 route table 改成惰性注册", quote: "route table 改成惰性注册" },
+    { kind: "anchor", text: "目标文件", quote: "G:/proj/src/router.ts" },
+    { kind: "constraint", text: "必须保留 /api/health", quote: "保留 /api/health" },
+    { kind: "decision", text: "分阶段惰性注册，避免改动 health", quote: "改成分阶段惰性注册" },
+    { kind: "file", text: "routes 是静态数组，health 在第一位", quote: "export const routes" },
+    { kind: "error_fix", text: "E_ROUTE_DUP 在 registry.ts:88", quote: "E_ROUTE_DUP" },
+    { kind: "progress", text: "正在改 router.ts", quote: "正在改 router.ts" },
+    { kind: "open_loop", text: "等待结构测试结果", quote: "等待结构测试结果" },
+    { kind: "preference", text: "不要破坏缓存率", quote: "别破坏缓存率" },
+  ],
+});
+
+let calls = 0;
+const extractResult = await compileCheckpoint(
+  { messages },
+  {
+    mode: "extract",
+    checkpointMaxTokens: 200,
+    queryText: "继续改 router.ts，注意缓存率",
+    callModel: async () => {
+      calls += 1;
+      return extraction;
+    },
+  },
+);
+checkTrue("exactly one model call in extract mode", calls === 1, `calls=${calls}`);
+checkTrue("checkpoint is produced", extractResult.text.length > 0);
+checkLine("checkpoint", extractResult.text, "## Primary Request and Intent");
+checkLine("checkpoint", extractResult.text, "## Verbatim Anchors");
+checkLine("checkpoint", extractResult.text, "G:/proj/src/router.ts");
+checkLine("checkpoint", extractResult.text, "E_ROUTE_DUP");
+checkTrue("audit records extraction", extractResult.audit.mode === "extract" && extractResult.audit.kept > 0, JSON.stringify(extractResult.audit));
+checkTrue("certificate passes", extractResult.audit.certificate.condensationExact === true);
+checkTrue("checkpoint shrinks the source", extractResult.audit.checkpointTokens < extractResult.audit.sourceTokens, JSON.stringify(extractResult.audit));
+
+// --- deterministic mode (no model call at all) -------------------------------
+let deterministicCalls = 0;
+const deterministic = await compileCheckpoint(
+  { messages },
+  {
+    mode: "deterministic",
+    queryText: "继续改 router.ts",
+    callModel: async () => {
+      deterministicCalls += 1;
+      return "{}";
+    },
+  },
+);
+checkTrue("deterministic mode never calls the model", deterministicCalls === 0, `calls=${deterministicCalls}`);
+checkTrue("deterministic mode still produces a checkpoint", deterministic.text.length > 0);
+
+// --- garbage extraction degrades to deterministic ----------------------------
+const degraded = await compileCheckpoint(
+  { messages },
+  { mode: "extract", queryText: "继续", checkpointMaxTokens: 200, callModel: async () => "not json at all" },
+);
+checkTrue("garbage extraction degrades to deterministic", degraded.audit.mode === "deterministic");
+
+// --- a throwing extractor degrades too ---------------------------------------
+const thrown = await compileCheckpoint(
+  { messages },
+  {
+    mode: "extract",
+    checkpointMaxTokens: 200,
+    queryText: "继续",
+    callModel: async () => {
+      throw new Error("provider down");
+    },
+  },
+);
+checkTrue("extractor failure degrades to deterministic", thrown.audit.mode === "deterministic" && thrown.audit.extractionError !== null);
+
+// --- idempotence: same input, same checkpoint -------------------------------
+const again = await compileCheckpoint(
+  { messages },
+  { mode: "extract", checkpointMaxTokens: 200, queryText: "继续改 router.ts，注意缓存率", callModel: async () => extraction },
+);
+checkTrue("deterministic render is byte-identical for the same atoms", again.text === extractResult.text);
+
+// --- the extraction call's envelope is carried into the audit ---------------
+const callUsage = { inputTokens: 11, cacheReadTokens: 900, outputTokens: 40 };
+const withCall = await compileCheckpoint(
+  { messages },
+  {
+    mode: "extract",
+    checkpointMaxTokens: 200,
+    queryText: "继续改 router.ts",
+    callModel: async () => ({ text: extraction, provider: "p", model: "m", maxTokens: 1234, usage: callUsage }),
+  },
+);
+checkTrue(
+  "extraction envelope is reported back",
+  withCall.call?.provider === "p" && withCall.call?.model === "m" && withCall.call?.maxTokens === 1234,
+  JSON.stringify(withCall.call),
+);
+checkTrue(
+  "extraction usage reaches the audit",
+  withCall.audit.extractor?.usage?.cacheReadTokens === 900,
+  JSON.stringify(withCall.audit.extractor),
+);
+
+console.log(failures === 0 ? "\nALL PIPELINE CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
+process.exitCode = failures === 0 ? 0 : 1;
