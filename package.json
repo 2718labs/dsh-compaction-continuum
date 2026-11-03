@@ -19,8 +19,10 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/structure.test.mjs && node test/pipeline.test.mjs",
-    "check": "node --check lib/index.js && node --check lib/pipeline.js && node --check lib/structure/core.js"
+    "test": "node test/structure.test.mjs && node test/pipeline.test.mjs && node test/bench.test.mjs",
+    "check": "node --check lib/index.js && node --check lib/pipeline.js && node --check lib/structure/core.js && node --check bench/report.mjs && node --check bench/accounting.mjs",
+    "bench": "node bench/report.mjs",
+    "bench:md": "node bench/report.mjs --format md"
   },
   "engines": {
     "node": ">=20"

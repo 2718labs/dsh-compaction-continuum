@@ -73,7 +73,15 @@ The shipped engine already has the right shape: it replays the conversation pref
 
 Measured on real sessions (27 sessions, 4400+ requests): steady-state hit rate 99.1%–99.7%; one publication costs one full re-read of the new prefix; a manual compaction after a 49-minute idle gap paid 331,799 uncached input tokens because the provider cache had expired — a cost no design avoids.
 
-The replay contract is checked at runtime: `projection alignment` in the self-test compares the compaction replay against the agent's own request projection. It currently reports `live=399 replayed=399 identical=true`, which is what makes the warm-prefix claim verifiable rather than aspirational.
+The replay contract is checked at runtime: `projection alignment` in the self-test compares the compaction replay against the durable surface projection, and it is identical (`live=399 replayed=399 identical=true`).
+
+**But identity with the durable projection is not identity with the live request.** Measured on three automatic compactions in one long session: the request immediately before compaction was 99.07%–99.93% cached (0.1–12.8 s earlier), yet the summarizer call matched only 0–9,856 tokens of its ~550k prompt — the cached prefix ends after the system/tools head, then diverges because the live request carried request-time material the durable log does not reproduce. Consequences:
+
+- Any replay-based summarizer pays a near-full prompt read per compaction (~549k–563k uncached in the measured runs, in addition to the ~162k–181k publication re-read).
+- This backend therefore keeps the model call **optional**: `deterministic` mode removes it (measured events → ~4× cheaper overall), while `extract` mode claims cost parity and spends the call on a certified, cited checkpoint instead of prose.
+- Making the replay byte-identical to the live request would turn the extraction call nearly free. It requires capturing the request-time envelope, which is not durable today; it is a roadmap item.
+
+See [`EVIDENCE.md`](./EVIDENCE.md) for the tables and method.
 
 ## 3. Why the prototype hook
 
@@ -128,12 +136,14 @@ Deterministic mode skips extraction entirely: message units themselves become th
 
 ## 6. Costs
 
-- Extraction: one model call of at most `extractorMaxTokens` output; input is the replayed prefix, usually warm.
+- Extraction: one model call of at most `extractorMaxTokens` output. Its input is the replayed durable prefix, which — measured — only matches the live request up to the system/tools head, so treat it as a cold call unless the live envelope can be reproduced (see §2).
+- Dispatched checking: `deterministic` mode performs no model call at all; on the measured automatic compactions that is the difference between ~721k–734k and ~165k–185k miss-equivalent per compaction.
 - Arithmetic: O(n³) LU on at most 48 candidates — sub-millisecond, no network, deterministic.
 - Accounting: per-session counters in memory only; no persistence, lost on restart.
 
 ## 7. Roadmap
 
+- Capture the exact live request envelope so the extraction request can hit the provider cache instead of paying a cold read.
 - Let the plugin state its retention preference for the preset-owned engine instead of inheriting the shipped default.
 - Relation weights learned from observed publication cost instead of fixed constants.
 - Checkpoint budget adaptation from the measured re-read cost.

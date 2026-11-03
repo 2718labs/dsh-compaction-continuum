@@ -15,7 +15,25 @@ English | [简体中文](./README.zh-CN.md)
 
 Instead of asking a model to write a free-form summary, this backend treats the conversation as a structure. Candidate blocks become degrees of freedom, evidence coupling becomes stiffness, the current request becomes the load, exact anchors and open loops become supports, and compression is a **static condensation**: keep the load-bearing coordinates, eliminate the rest, and publish a checkpoint only when the reduction carries a certificate. The checkpoint is assembled deterministically from quotes that were verified as substrings of the replayed source.
 
-The shipped compaction engine still owns everything durable — the bracket, the lock, the overflow recovery, the retained tail and the warm-prefix replay. This plugin replaces only how the checkpoint content is produced.
+The shipped compaction engine still owns everything durable — the bracket, the lock, the overflow recovery, the retained tail and the replay. This plugin replaces only how the checkpoint content is produced.
+
+## Why this exists (measured)
+
+Compaction is rare but expensive, and the measured dominant cost is not "writing a summary" — it is a model call that cannot hit the provider cache. Measured on 25 recorded sessions, 3,515 requests and 997M prompt tokens ([full evidence and method](./docs/EVIDENCE.md)):
+
+| Finding | Measured value |
+| --- | --- |
+| Steady-state prefix-cache hit rate | 99.20% |
+| One shipped automatic compaction | ~721k – 734k miss-equivalent (3 events) |
+| ↳ of which the summarizing call | ~549k – 563k uncached input, cache read 0 – 9,856 tokens |
+| ↳ of which the publication re-read | ~162k – 181k miss-equivalent |
+| The request just before each compaction | 99.07% – 99.93% cached, 0.1 – 12.8 s earlier |
+| Tool-result pruning (3 runs) | freed 141k tokens, caused 1.68M miss-equivalent of re-read |
+
+The summarizer request replays the durable prefix, but the live request carries request-time material the log cannot reproduce, so the cached part ends after the system/tools head. Any replay-based summarizer pays that. This backend therefore treats the model call as **optional**:
+
+- `mode: deterministic` — **no model call at all**; on the measured events the compaction cost drops from ~727k to the publication only (~165k–185k), ~4× cheaper, at the price of semantic atoms.
+- `mode: extract` — one call, cost parity with the shipped summarizer, but the published checkpoint is traceable to verified quotes and carries a condensation certificate.
 
 ## Status
 
@@ -43,7 +61,7 @@ shadowed span
 
 **Fail-open ladder.** Structural compile → deterministic render (no model call at all) → shipped LLM summarizer. A session always ends up with a checkpoint.
 
-The extraction call reuses the session's own prefix: same system prompt, same tool catalog, same history, with only the instruction appended. It does not introduce a summarizer-specific system prompt and never switches models, so the provider prefix cache stays warm when compaction runs close to a request.
+The extraction call replays the session's own durable prefix — same system prompt, same tool catalog, same logged history, with only the instruction appended — and never switches models or adds a summarizer-specific system prompt. Measured caveat: the live request contains request-time material the durable log does not record, so the cached part of this replay ends after the system/tools head (0 – 9,856 of ~550k tokens in the measured runs). That is why `extract` mode claims cost parity, not savings, and why the zero-model `deterministic` mode exists.
 
 ## How it attaches to the host
 
@@ -159,23 +177,24 @@ Keys that only apply when this plugin is itself the `compaction` provider (non-d
 
 ## Cache economics
 
-Measured on real sessions (27 sessions, 4400+ requests) with the desktop app:
+Measured with the shipped backend on the logged sessions — see [docs/EVIDENCE.md](./docs/EVIDENCE.md) for method, per-event tables and limitations:
 
 | Observation | Value |
 | --- | --- |
-| Steady-state prefix-cache hit rate | 99.1% – 99.7% |
-| One-time publication re-read after a compaction | one full read of the new prefix, unavoidable for any rewrite |
-| Manual `/compact` after a 49-minute idle gap | extraction call paid 331,799 uncached tokens (provider cache had expired — no design can avoid this) |
-| Compaction replay vs. the agent's own request projection | identical: `live=399 replayed=399 identical=true` |
-| Tool-result pruning (`tool-result-pruner`) | net cache loss: ≈1.1M miss-equivalent over three runs — this compressor adds no pruning of its own (the desktop preset still mounts the shipped pruner, which this plugin does not control) |
+| Steady-state prefix-cache hit rate | 99.20% over 3,515 requests / 997M prompt tokens |
+| One-time publication re-read after a compaction | one full read of the new prefix, unavoidable for any rewrite (~162k–181k miss-equivalent on the measured automatic events) |
+| Summarizing call right before each of those events | cold: 0 / 9,856 / 9,856 cached of ~550k–563k, despite a 99%+ hot request 0.1–12.8 s earlier |
+| Manual `/compact` after a long idle gap | 331,799 uncached for the summary call (expired cache; no design avoids it) |
+| Compaction replay vs. the durable surface projection | identical: `live=399 replayed=399 identical=true` — it diverges from the *live request*, not from the log |
+| Tool-result pruning (`tool-result-pruner`) | freed 141,041 tokens, caused 1,675,192 miss-equivalent of re-read — why this compressor adds no pruning (the desktop preset still mounts the shipped pruner, which this plugin does not control) |
 
-Hard rules the implementation keeps: one publication per epoch; never rewrite mid-history; prefer a deep cut over frequent shallow ones; drive compaction by window pressure, not by turn count; never summarize a cold prefix deliberately.
+Hard rules the implementation keeps: one publication per epoch; never rewrite mid-history; prefer a deep cut over frequent shallow ones; drive compaction by window pressure, not by turn count; never summarize a cold prefix deliberately; make the summarizing call optional.
 
 ## Known limitations
 
 - The threshold and retained-tail policy on the desktop come from the preset's shipped engine. Manual `/compact` cuts deeper than automatic compaction (the shipped engine retains `0` for it).
 - If the extraction call returns unverifiable quotes, the checkpoint falls back to deterministic structural rendering; if that cannot shrink the source, the shipped summarizer runs. Quality is therefore bounded by the extractor's citation discipline, and the certificate proves structure, not information-theoretic completeness.
-- The prefix cache must still be warm for the extraction call to be cheap. A manual compaction minutes or hours after the last request pays a full read.
+- The extraction call cannot currently reuse the live request prefix: the measured replay hits only the system/tools head, so `extract` mode is cost parity with the shipped summarizer. `deterministic` mode avoids the call entirely. Making the replay byte-identical to the live request is a roadmap item (docs/DESIGN.md §7).
 - The hook targets one specific shipped engine seam. It fails open, but a future Harness release that renames or relocates `summarize` would silently return to the shipped summarizer — check `hook.backendUsesHookedSummarize` after upgrades.
 - The desktop preset still mounts the shipped tool-result pruner inside its isolated group. Real-session measurements show it is a net cache loss (≈1.1M miss-equivalent over three runs). Removing it means overriding the preset declaration (the option rejected in `docs/DESIGN.md` §3); this bundle intentionally does not do that.
 
@@ -183,7 +202,7 @@ Hard rules the implementation keeps: one publication per epoch; never rewrite mi
 
 ```bash
 npm run check   # syntax
-npm test        # offline structural core + pipeline suite (30+ assertions, no Harness needed)
+npm test        # offline: structural core + pipeline + bench harness (80 assertions, no Harness needed)
 ```
 
 Layout:
@@ -192,8 +211,10 @@ Layout:
 lib/index.js            host half: engine hook, commands, accounting, diagnostics
 lib/pipeline.js         extraction → structure → render pipeline (pure, testable offline)
 lib/structure/core.js   stiffness assembly, KKT solve, static condensation, certificates
+bench/                  reproducible cache/compaction accounting over recorded session logs
 test/                   offline suites
-docs/DESIGN.md          design notes: structural model, cache math, hook rationale
+docs/DESIGN.md          design notes: structural model, cache constraints, hook rationale
+docs/EVIDENCE.md        measured evidence: baseline, compaction anatomy, pruner cost, contracts
 ```
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the invariants a PR must keep.

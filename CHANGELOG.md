@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- `bench/` reproducible accounting over recorded session logs: per-session cache baseline, compaction anatomy (summarizer call + publication re-read, with backend detection from the published audit), and pruner-run cost, with hashed session labels and no content access.
+- `docs/EVIDENCE.md` / `docs/EVIDENCE.zh-CN.md`: measured evidence and methodology (25 sessions, 3,515 requests, 997M prompt tokens), including the finding that shipped summarization calls hit only the system/tools head of the cache (~0–9,856 of ~550k tokens) even 0.1 s after a 99.85%-cached request.
+- Benchmark harness tests (discovery, accounting math, backend detection, pruner attribution, rendering).
+
+### Changed
+
+- Documentation now reports measured cache behavior instead of the earlier warm-prefix expectation: `extract` mode claims cost parity with the shipped summarizer, and `deterministic` mode is documented as the zero-model-call, ~4× cheaper option on the measured events.
+- Offline suite is now 80 assertions across structure, pipeline and benchmark.
+
 ## [0.3.0] - 2026-11-04
 
 First public release: **结构性压缩 / Structural Compression**.

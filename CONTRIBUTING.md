@@ -7,8 +7,9 @@ Thanks for taking a look. This is a small, focused plugin: it is a compression *
 Requirements: Node.js >= 20 (no package installation needed — the plugin and its tests have no runtime or dev dependencies).
 
 ```bash
-npm test    # offline: structural core + pipeline, 30+ assertions
+npm test    # offline: structural core + pipeline + benchmark harness, 80 assertions
 npm run check
+node bench/report.mjs   # accounting over this machine's recorded sessions (or pass a directory)
 ```
 
 The offline suite is the contract: the extraction prompt shape, quote provenance, the stiffness/KKT/condensation arithmetic, the certificates, the deterministic render, and the fail-open ladder. Host behavior is verified on a live Harness install (see below).
