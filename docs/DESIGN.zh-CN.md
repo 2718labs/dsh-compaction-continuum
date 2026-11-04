@@ -115,11 +115,25 @@ lib/pipeline.js
   selectKeepers({items, queryText, supports, ...})
     关系 → 装配刚度 → 载荷 → 约束求解 → 打分
     保留 supports + score ≥ 阈值·maxScore，补足 minKeep，依赖组整体进出
-  renderCheckpoint(items, kept, budget)  确定性分节渲染，引文随行
+  renderCheckpoint(items, kept, budget)  确定性分节渲染；Next Step 优先排版
+  buildVerbatimRetention(units, budget)  逐字用户请求 → 最近单元
+  召回提示（可选）                      ## Recall (exact original)
   证书检查 + 收缩检查
+  （lib/index.js，Host 半边）
+  collectRetainedImages(input.messages)  图像块拼入 checkpoint 消息
 ```
 
 deterministic 模式完全跳抽取：消息 unit 直接作为坐标，kind 由角色与内容推断。它零模型调用，适合隐私或成本受限的 profile；因为没有语义 atom，质量较低。
+
+### 连续性分层
+
+checkpoint 必须能让后继继续，同时不能永远堆积已完成的工作。五层机制界定这个生命周期：
+
+- **Next Step。** 抽取提供 `next_step` 条目并钉为支座；缺失时确定性兜底逐字引用最近真实请求（或最近助手状态）。证书：`nextStepAnchored`。
+- **逐字保留。** 真实用户请求不压缩、最新优先，随后是最近的非用户单元，预算 `verbatimTokens`；该块夹紧到 checkpoint 仍小于源区间。证书：`userMessagesVerbatim`。
+- **锚点结转。** 上一代 checkpoint 的新鲜锚点只结转一次，进入 `## Carried Anchors (older)` 并钉为支座；下一代若没有新的抽取证据就释放，因此过期锚点约存活两代。证书：`carriedAnchorsPreserved`。
+- **释放。** 抽取指令要求丢弃已完成步骤、已修复错误、已解决任务与已完成请求；保留块在压力下先丢最旧；保留图像按最新优先、数量封顶。被释放内容仍在持久日志中。
+- **召回与图像。** `context_recall` 按需检索或读取调用 agent 的持久事件，checkpoint 带提示；未离载的图像块直接拼入 checkpoint 消息（受 `maxRetainedImages` 约束），不再退化为占位符。
 
 ## 5. 失败模式
 
@@ -140,6 +154,7 @@ deterministic 模式完全跳抽取：消息 unit 直接作为坐标，kind 由�
 - 调度层面的检查：`deterministic` 模式零模型调用；在实测的自动压缩事件上，这就是每次 ~721k–734k 与 ~165k–185k miss-equivalent 的差别。
 - 算术：对 ≤48 个候选做 O(n³) LU——亚毫秒、无网络、确定性。
 - 记账：每会话内存计数，不落盘，重启即丢。
+- checkpoint 体积：结构索引受 `checkpointMaxTokens` 约束，逐字保留再叠加最多 `verbatimTokens`，因此近无损发布体积比 v0.3 的测量大约多 2 万 token，一次性发布重读随之增长。设 `verbatimTokens: 0` 可回到压缩率优先的体积。
 
 ## 7. 路线图
 
@@ -148,3 +163,5 @@ deterministic 模式完全跳抽取：消息 unit 直接作为坐标，kind 由�
 - 关系权重从观测到的发布代价学习，替代固定常数。
 - 依据实测重读成本自适应 checkpoint 预算。
 - 更丰富的抽取 kind，以及更严格的引文解析（拒绝"仅归一化后才匹配"的引文）。
+- 用再证据打分替代结转锚点的单代过期规则。
+- 为落在保留集之外的图像提供附件解析。

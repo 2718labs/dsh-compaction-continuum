@@ -115,11 +115,25 @@ lib/pipeline.js
   selectKeepers({items, queryText, supports, ...})
     relations → assembleStiffness → load → solveConstrained → scores
     keep supports + score ≥ threshold·maxScore, top-up to minKeep, close dependency groups
-  renderCheckpoint(items, kept, budget)  deterministic sections, quotes appended
+  renderCheckpoint(items, kept, budget)  deterministic sections; Next Step laid out first
+  buildVerbatimRetention(units, budget)  verbatim user requests → recent units
+  recall hint (optional)                 ## Recall (exact original)
   certificate checks + shrink check
+  (lib/index.js, host half)
+  collectRetainedImages(input.messages)  image blocks spliced into the checkpoint message
 ```
 
 Deterministic mode skips extraction entirely: message units themselves become the coordinates, with kinds inferred from role and content. It performs zero model calls, so it is suitable for privacy-constrained or cost-constrained profiles; quality is lower because no semantic atoms exist.
+
+### Continuity layers
+
+A checkpoint must let the successor continue, and must not accumulate completed work forever. Five layers bound that lifecycle:
+
+- **Next Step.** The extractor supplies a `next_step` atom, pinned as a support; if it declines, a deterministic floor quotes the latest real request (or the latest assistant state). Certificate: `nextStepAnchored`.
+- **Verbatim retention.** Real user requests are copied uncompressed, newest first, followed by recent non-user units, under `verbatimTokens`. The block is clamped so the checkpoint still shrinks its source. Certificate: `userMessagesVerbatim`.
+- **Carried anchors.** Fresh anchors from the previous checkpoint are carried once into `## Carried Anchors (older)` and pinned; the next generation releases them unless fresh extraction re-evidences them, so a stale pin lives about two generations. Certificate: `carriedAnchorsPreserved`.
+- **Release.** The extraction instruction requires dropping completed steps, fixed errors, resolved tasks and finished requests. Retention drops the oldest under pressure; retained images are capped newest-first. Released material stays in the durable log.
+- **Recall and images.** `context_recall` searches or reads the calling agent's durable events on demand, and the checkpoint carries a hint to it; non-offloaded image blocks are spliced into the checkpoint message (bounded by `maxRetainedImages`) rather than replaced by a placeholder.
 
 ## 5. Failure modes
 
@@ -140,6 +154,7 @@ Deterministic mode skips extraction entirely: message units themselves become th
 - Dispatched checking: `deterministic` mode performs no model call at all; on the measured automatic compactions that is the difference between ~721k–734k and ~165k–185k miss-equivalent per compaction.
 - Arithmetic: O(n³) LU on at most 48 candidates — sub-millisecond, no network, deterministic.
 - Accounting: per-session counters in memory only; no persistence, lost on restart.
+- Checkpoint size: the structural index is bounded by `checkpointMaxTokens`; verbatim retention adds up to `verbatimTokens` on top, so a near-lossless publication is roughly 20k tokens larger than the v0.3 measurement and the one-time publication re-read grows with it. `verbatimTokens: 0` restores the compression-first size.
 
 ## 7. Roadmap
 
@@ -148,3 +163,5 @@ Deterministic mode skips extraction entirely: message units themselves become th
 - Relation weights learned from observed publication cost instead of fixed constants.
 - Checkpoint budget adaptation from the measured re-read cost.
 - Richer extraction kinds and a stricter quote parser (reject quotes that only match after normalisation).
+- Re-evidence scoring for carried anchors instead of the one-generation expiry rule.
+- Attachment resolution for images that fall outside the retained set.
