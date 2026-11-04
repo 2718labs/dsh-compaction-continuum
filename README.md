@@ -2,7 +2,7 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-v0.5.0-A44742)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.6.0-A44742)](./CHANGELOG.md)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.2.1--rc.5-1F6B5B)](https://github.com/deepseek-ai)
 [![License](https://img.shields.io/badge/license-MIT-263238)](./LICENSE)
 [![CI](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml/badge.svg)](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml)
@@ -133,6 +133,14 @@ A structural checkpoint is an index, not a transcript: it says what is load-bear
 
 The cost is size: a near-lossless checkpoint is roughly the retention budget rather than a few thousand tokens, and the one-time publication re-read grows with it. Set `verbatimTokens: 0` for the earlier compression-first behaviour. Even with retention, assistant reasoning and tool output outside the retained set still survive only through atoms — the durable session log is the exact fallback, not the checkpoint.
 
+### Recall, images, and release
+
+Near-lossless needs two escape hatches: retrieval and forgetting.
+
+- **Recall.** When `recallTool` is enabled the plugin registers `context_recall`. The checkpoint carries a short `## Recall (exact original)` hint; the tool searches the durable session log literally, or reads an event seq range, capped in characters. A compacted detail is recoverable exactly without keeping every token in the prompt.
+- **Images.** Real image blocks from the span are spliced into the checkpoint message itself (newest first, deduplicated by attachment, up to `maxRetainedImages`), so visual evidence is not reduced to a placeholder.
+- **Release.** Retention and carried anchors have a lifetime. The extraction instruction must drop completed steps, fixed errors, resolved tasks and finished requests. Anchors from the previous checkpoint are carried once into `## Carried Anchors (older)`; the next generation releases them unless fresh extraction re-evidences them, so a pin lives about two generations after its last real citation. Verbatim retention is newest-first and drops the oldest under budget; retained images are capped newest-first. Released content stays in the durable log and is reachable through `context_recall`.
+
 ## Attachment point
 
 The desktop application places the compaction backend inside each agent preset's isolated scope, so a `compaction` provider mounted on the Host plane is not visible to it. This plugin therefore does not register a second `compaction` provider. It replaces the one extension point the shipped engine publicly exposes: `BasicCompactionEngine.prototype.summarize`. The shipped compaction flow dispatches through that method on every compaction, so replacing it also covers the preset-plane engine, while the shipped transaction, lock, overflow recovery, retained tail and replay logic remain unchanged. The original method is restored when the plugin is unloaded.
@@ -156,7 +164,7 @@ Requires the desktop Harness with `BasicCompactionEngine` reachable in the compo
 Install the GitHub bundle with the plugin manager:
 
 ```
-target: github:2718labs/dsh-compaction-continuum#v0.5.0
+target: github:2718labs/dsh-compaction-continuum#v0.6.0
 ```
 
 For a manual installation, add the dependency and the bundle to `~/.dsh/profiles/<profile>/package.json`. The bundle must be listed after `@deepseek-ai/dsh-web-app`:
@@ -164,7 +172,7 @@ For a manual installation, add the dependency and the bundle to `~/.dsh/profiles
 ```json
 {
   "dependencies": {
-    "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.5.0"
+    "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.6.0"
   },
   "dsh": { "profile": { "bundles": ["...", "dsh-compaction-continuum"] } }
 }
@@ -217,6 +225,8 @@ The plugin row configures the compressor only. Compaction thresholds and retenti
 | `extractorMaxTokens` | `12000` | Output cap for the extraction call |
 | `checkpointMaxTokens` | `6000` | Structural-checkpoint budget |
 | `verbatimTokens` | `20000` | Verbatim-retention budget for user requests and recent units; `0` disables the near-lossless layer |
+| `recallTool` | `true` | Register `context_recall` and add the checkpoint's Recall hint |
+| `maxRetainedImages` | `4` | Maximum image blocks spliced into the checkpoint; `0` disables image retention |
 | `selectionThreshold` | `0.35` | Load-bearing cutoff relative to the maximum displacement |
 | `minKeep` | `8` | Minimum number of items retained |
 | `statusCommands` | `true` | Whether to register the commands and loopback diagnostics |
@@ -255,7 +265,7 @@ node bench/report.mjs
 
 ```bash
 npm run check   # syntax
-npm test        # 110 offline assertions, no Harness installation required
+npm test        # 122 offline assertions, no Harness installation required
 node bench/report.mjs   # cache accounting over this machine's session logs
 ```
 

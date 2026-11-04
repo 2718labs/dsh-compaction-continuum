@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-11-04
+
+### Added
+
+- `context_recall` tool (on by default): literal search or seq-range read of the durable session log, so a compacted checkpoint never has to be the only copy of the conversation. When enabled, the checkpoint gains a `## Recall (exact original)` hint naming the tool.
+- Image retention: non-offloaded image blocks from the compacted span are spliced into the checkpoint message itself (newest-first, deduplicated, bounded by `maxRetainedImages`, default 4) instead of being reduced to a text placeholder.
+- Cross-generation anchor carry: anchors from the previous checkpoint are carried once into a separate `## Carried Anchors (older)` section and pinned as supports; the following generation releases them unless fresh extraction re-evidences the same anchor.
+- Release policy: the extraction instruction now requires dropping completed steps, fixed errors, resolved tasks and finished requests. Release is explicit, so ten compactions cannot accumulate ten generations of finished work.
+
+### Changed
+
+- New `recallTool` and `maxRetainedImages` config keys; `/context_status` reports carried/released anchors and retained images. Offline suite is now 122 assertions.
+- README documents the deliberate lifetime of carried material and the retrieval path.
+
 ## [0.5.0] - 2026-11-04
 
 ### Added
@@ -80,7 +94,8 @@ First public release: **结构性压缩 / Structural Compression**.
 
 - Initial structural compressor: extraction pipeline, stiffness/KKT/condensation core, certificates, deterministic render, offline tests.
 
-[Unreleased]: https://github.com/2718labs/dsh-compaction-continuum/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/2718labs/dsh-compaction-continuum/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/2718labs/dsh-compaction-continuum/releases/tag/v0.6.0
 [0.5.0]: https://github.com/2718labs/dsh-compaction-continuum/releases/tag/v0.5.0
 [0.4.0]: https://github.com/2718labs/dsh-compaction-continuum/releases/tag/v0.4.0
 [0.3.0]: https://github.com/2718labs/dsh-compaction-continuum/releases/tag/v0.3.0

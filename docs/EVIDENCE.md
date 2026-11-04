@@ -128,7 +128,7 @@ Beyond cost, the plugin imposes testable constraints on what is published:
 
 Measured shipped summaries are 1,728 to 5,131 tokens long. This plugin's structural checkpoint is bounded by `checkpointMaxTokens` (default 6,000) and contains only verifiable material; the published checkpoint additionally carries a verbatim retention block bounded by `verbatimTokens` (default 20,000) and clamped to keep the checkpoint smaller than its source.
 
-The offline suite contains 110 assertions covering: rejection of invented and paraphrased quotes, rejection of lost supports, reporting of ungrounded structures, rejection of checkpoints that cannot shrink the source, degradation on extractor failure, absence of model calls in `deterministic` mode, byte-identical rendering, continuation anchoring across three successive compaction generations, and verbatim retention of the user requests across those generations.
+The offline suite contains 122 assertions covering: rejection of invented and paraphrased quotes, rejection of lost supports, reporting of ungrounded structures, rejection of checkpoints that cannot shrink the source, degradation on extractor failure, absence of model calls in `deterministic` mode, byte-identical rendering, continuation anchoring and verbatim retention of user requests across three successive compaction generations, cross-generation anchor carry with one-generation release, recall-hint emission, and bounded image retention.
 
 ## 8. Additional observations
 
@@ -160,7 +160,7 @@ In this case the cache had genuinely expired (about 49 minutes since the precedi
 ## 10. Reproduction
 
 ```bash
-npm test                                   # 110 offline assertions, no Harness installation required
+npm test                                   # 122 offline assertions, no Harness installation required
 node bench/report.mjs                      # account this machine's sessions
 node bench/report.mjs <dir> --format md    # render tables in the same format as this report
 node bench/report.mjs --format json        # raw data

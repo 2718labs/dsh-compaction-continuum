@@ -2,7 +2,7 @@
 
 [English](./README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-v0.5.0-A44742)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v0.6.0-A44742)](./CHANGELOG.md)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-0.2.1--rc.5-1F6B5B)](https://github.com/deepseek-ai)
 [![License](https://img.shields.io/badge/license-MIT-263238)](./LICENSE)
 [![CI](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml/badge.svg)](https://github.com/2718labs/dsh-compaction-continuum/actions/workflows/ci.yml)
@@ -133,6 +133,14 @@ flowchart TD
 
 代价是体积：近无损 checkpoint 大致等于保留预算，而不是几千 token；一次性发布重读随之增长。设 `verbatimTokens: 0` 回到早期以压缩率优先的行为。即便启用保留，保留集之外的助手推理与工具输出仍只通过条目存活——精确回退是持久会话日志，而不是 checkpoint 本身。
 
+### 召回、图像与释放
+
+近无损需要两个出口：能取回，也能忘掉。
+
+- **召回。** `recallTool` 开启时注册 `context_recall`；checkpoint 附带一行 `## Recall (exact original)` 提示。该工具可按字面检索持久会话日志，或按 seq 区间读取，输出有字符上限。被压缩掉的细节因此可以精确取回，而不必把每个 token 都留在上下文里。
+- **图像。** 跨度中未离载的真实图像块会被直接拼进 checkpoint 消息（最新优先、按附件去重、受 `maxRetainedImages` 限制），视觉证据不再退化成一个占位符。
+- **释放。** 保留与结转都有生命周期。抽取指令必须丢弃已完成的步骤、已修复的错误、已解决的任务和已完成的请求。上一代 checkpoint 的锚点只结转一次，进入 `## Carried Anchors (older)`；下一代若没有新的抽取证据就释放，因此一个锚点在最后一次真实引用后大约只再存活两代。逐字保留按最新优先、预算不足时先丢最旧；保留图像同样受数量上限约束、最新优先。被释放的内容仍在持久日志里，可随时用 `context_recall` 取回。
+
 ## 挂载方式
 
 桌面版将压缩后端置于每个 agent preset 的隔离域内，Host 平面挂载的 `compaction` 服务对其不可见。因此本插件不注册第二个 `compaction` 提供者，而是替换官方引擎唯一公开的扩展点 `BasicCompactionEngine.prototype.summarize`。官方压缩流程每次都会动态调用该方法，替换后 preset 平面的引擎同样使用本插件的压缩器；官方的事务、锁、溢出恢复、保留尾部与重放逻辑保持不变。插件卸载时还原原型方法。
@@ -156,7 +164,7 @@ flowchart TD
 使用插件管理器安装 GitHub bundle：
 
 ```
-target: github:2718labs/dsh-compaction-continuum#v0.5.0
+target: github:2718labs/dsh-compaction-continuum#v0.6.0
 ```
 
 手动安装时，在 `~/.dsh/profiles/<profile>/package.json` 中添加依赖与 bundle。bundle 必须排在 `@deepseek-ai/dsh-web-app` 之后：
@@ -164,7 +172,7 @@ target: github:2718labs/dsh-compaction-continuum#v0.5.0
 ```json
 {
   "dependencies": {
-    "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.5.0"
+    "dsh-compaction-continuum": "github:2718labs/dsh-compaction-continuum#v0.6.0"
   },
   "dsh": { "profile": { "bundles": ["...", "dsh-compaction-continuum"] } }
 }
@@ -216,6 +224,8 @@ cache accounting   : 123 requests, hit 99.24% (384347520 cached / 2935624 uncach
 | `extractorMaxTokens` | `12000` | 抽取调用输出上限 |
 | `checkpointMaxTokens` | `6000` | 结构 checkpoint 预算 |
 | `verbatimTokens` | `20000` | 用户请求与最近单元的逐字保留预算；`0` 关闭近无损层 |
+| `recallTool` | `true` | 注册 `context_recall` 并在 checkpoint 中加入召回提示 |
+| `maxRetainedImages` | `4` | 拼入 checkpoint 的图像块上限；`0` 关闭图像保留 |
 | `selectionThreshold` | `0.35` | 承重判定阈值，相对于最大位移 |
 | `minKeep` | `8` | 最少保留条目数 |
 | `statusCommands` | `true` | 是否注册命令与回环诊断端点 |
@@ -254,7 +264,7 @@ node bench/report.mjs
 
 ```bash
 npm run check   # 语法检查
-npm test        # 110 条离线断言，无需安装 Harness
+npm test        # 122 条离线断言，无需安装 Harness
 node bench/report.mjs   # 基于本机会话日志计算缓存账
 ```
 

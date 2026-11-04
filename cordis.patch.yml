@@ -40,6 +40,8 @@
         extractorMaxTokens: 12000
         checkpointMaxTokens: 6000
         verbatimTokens: 20000
+        recallTool: true
+        maxRetainedImages: 4
         selectionThreshold: 0.35
         minKeep: 8
         statusCommands: true

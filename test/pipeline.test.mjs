@@ -3,7 +3,7 @@
  * the one extraction call, so the structural solve, certification and rendering
  * can be verified independently.
  */
-import { compileCheckpoint, segmentMessages, validateAtoms } from "../lib/pipeline.js";
+import { collectRetainedImages, compileCheckpoint, segmentMessages, validateAtoms } from "../lib/pipeline.js";
 
 let failures = 0;
 function checkTrue(name, value, detail = "") {
@@ -354,6 +354,114 @@ checkTrue(
   tightRetention.audit.certificate.userMessagesVerbatim === false,
   JSON.stringify(tightRetention.audit.certificate),
 );
+
+// --- release and cross-generation carry --------------------------------------
+const carryMessages = [
+  { role: "system", content: [{ type: "text", text: "You are a coding agent." }] },
+  {
+    role: "user",
+    content: [{
+      type: "text",
+      text: [
+        "This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context.",
+        "",
+        "<compacted-summary>",
+        "## Verbatim Anchors",
+        '- repo — "G:/proj/src/router.ts"',
+        "## Carried Anchors (older)",
+        '- old pin — "E_OLD_CODE"',
+        "</compacted-summary>",
+      ].join("\n"),
+    }],
+  },
+  { role: "assistant", content: [{ type: "text", text: "继续改 G:/proj/src/router.ts 的惰性注册，保留 /api/health 顺序。" }] },
+  {
+    role: "assistant",
+    content: [{
+      type: "text",
+      text: Array.from({ length: 18 }, (_, index) => `步骤 ${index}: 检查 G:/proj/src/router.ts 的静态路由表，记录 /api/health 的顺序约束。`).join("\n"),
+    }],
+  },
+  { role: "user", content: [{ type: "text", text: "继续，跑测试。" }] },
+];
+const carryAtoms = JSON.stringify({
+  atoms: [
+    { kind: "goal", text: "继续惰性注册", quote: "继续改 G:/proj/src/router.ts 的惰性注册" },
+    { kind: "anchor", text: "目标文件", quote: "G:/proj/src/router.ts" },
+    { kind: "constraint", text: "保留 /api/health 顺序", quote: "保留 /api/health 顺序" },
+    { kind: "next_step", text: "运行测试", quote: "继续，跑测试。" },
+  ],
+});
+const carriedResult = await compileCheckpoint(
+  { messages: carryMessages },
+  { mode: "extract", checkpointMaxTokens: 600, verbatimTokens: 0, queryText: "继续，跑测试。", callModel: async () => carryAtoms },
+);
+checkTrue("fresh anchors from the previous checkpoint are carried once", carriedResult.audit.carriedAnchors === 1, JSON.stringify(carriedResult.audit));
+checkTrue("previously carried anchors are released", carriedResult.audit.releasedAnchors === 1, JSON.stringify(carriedResult.audit));
+checkTrue(
+  "carried anchors render in their own section",
+  carriedResult.text.includes("## Carried Anchors (older)") && carriedResult.text.includes("G:/proj/src/router.ts"),
+  JSON.stringify(carriedResult.text.slice(-600)),
+);
+checkTrue("carried anchors are certified as preserved", carriedResult.audit.certificate.carriedAnchorsPreserved === true);
+
+const nextGeneration = [
+  { role: "system", content: [{ type: "text", text: "You are a coding agent." }] },
+  {
+    role: "user",
+    content: [{
+      type: "text",
+      text: `This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context.\n\n<compacted-summary>\n${carriedResult.text}\n</compacted-summary>`,
+    }],
+  },
+  { role: "assistant", content: [{ type: "text", text: "继续改 G:/proj/src/router.ts 的惰性注册，保留 /api/health 顺序。" }] },
+  {
+    role: "assistant",
+    content: [{
+      type: "text",
+      text: Array.from({ length: 18 }, (_, index) => `步骤 ${index}: 检查 G:/proj/src/router.ts 的静态路由表，记录 /api/health 的顺序约束。`).join("\n"),
+    }],
+  },
+  { role: "user", content: [{ type: "text", text: "继续，跑测试。" }] },
+];
+const releasedResult = await compileCheckpoint(
+  { messages: nextGeneration },
+  { mode: "extract", checkpointMaxTokens: 600, verbatimTokens: 0, queryText: "继续，跑测试。", callModel: async () => carryAtoms },
+);
+checkTrue("a second generation releases the older carried anchors", releasedResult.audit.releasedAnchors >= 1, JSON.stringify(releasedResult.audit));
+
+// --- recall hint -------------------------------------------------------------
+const withRecall = await compileCheckpoint(
+  { messages },
+  { mode: "extract", checkpointMaxTokens: 400, verbatimTokens: 0, recallHint: true, queryText: "继续", callModel: async () => extraction },
+);
+checkTrue(
+  "the recall hint names the retrieval tool",
+  withRecall.text.includes("## Recall (exact original)") && withRecall.text.includes("context_recall"),
+  JSON.stringify(withRecall.text.slice(-400)),
+);
+const withoutRecall = await compileCheckpoint(
+  { messages },
+  { mode: "extract", checkpointMaxTokens: 400, verbatimTokens: 0, queryText: "继续", callModel: async () => extraction },
+);
+checkTrue("the recall hint is opt-in", !withoutRecall.text.includes("## Recall (exact original)"));
+
+// --- image retention ---------------------------------------------------------
+const imageMessages = [
+  { role: "user", content: [{ type: "text", text: "看这两张图。" }, { type: "image", attachment: { attachmentId: "img_old", mediaType: "image/png" } }] },
+  { role: "assistant", content: [{ type: "text", text: "收到。" }] },
+  { role: "user", content: [{ type: "image", attachment: { attachmentId: "img_new", mediaType: "image/png" } }] },
+  { role: "user", content: [{ type: "image", attachment: { attachmentId: "img_off", mediaType: "image/png" }, offloaded: true }] },
+  { role: "user", content: [{ type: "image", attachment: { attachmentId: "img_new", mediaType: "image/png" } }] },
+];
+const retainedImages = collectRetainedImages(imageMessages, 4);
+checkTrue("newest non-offloaded images are retained", retainedImages.length === 2, JSON.stringify(retainedImages.map((block) => block.attachment.attachmentId)));
+checkTrue("offloaded images are skipped", !retainedImages.some((block) => block.attachment.attachmentId === "img_off"));
+checkTrue("retained images are deduplicated by attachment", new Set(retainedImages.map((block) => block.attachment.attachmentId)).size === retainedImages.length);
+const boundedImages = collectRetainedImages(imageMessages, 1);
+checkTrue("the image budget is enforced", boundedImages.length === 1 && boundedImages[0].attachment.attachmentId === "img_new");
+const noImages = collectRetainedImages(imageMessages, 0);
+checkTrue("image retention can be disabled", noImages.length === 0);
 
 console.log(failures === 0 ? "\nALL PIPELINE CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exitCode = failures === 0 ? 0 : 1;
